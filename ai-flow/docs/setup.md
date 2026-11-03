@@ -1,0 +1,957 @@
+# issue-to-pr-flow — Setup and Operation Guide
+
+This guide covers installing the flow into a repository and running it day to day.
+For a short overview, see the [README](../README.md); for day-to-day use (writing Issues, reading what the agents post, resuming), see the [user guide](guide.md) ([日本語](guide.ja.md)).
+To have a coding agent install the flow, point it to [setup-with-agent.md](setup-with-agent.md).
+
+---
+
+## 1. What this is
+
+**A mechanism that starts from a GitHub Issue and drives Claude Code headlessly all the way to a Pull Request.**
+`make spec` settles the specification; `make impl` carries on through implementation, review, and PR creation.
+
+```
+Issue
+ │
+ ├─ make spec ────► posts questions OR an instruction document (with acceptance criteria) to the Issue, then stops
+ │                   ▲
+ │                   └─ a human reads it ← the only human gate
+ │
+ └─ make impl ────► plan → judge → revise (up to 3 rounds until approved)
+                     → implement
+                     → review → fix (up to 3 rounds until approved)
+                     → commit and create the PR
+                     → post a code review on the PR
+                                    ▲
+                                    └─ a human decides whether to merge
+```
+
+Three design principles:
+
+1. **Only one human gate.** A human checks the instruction document; from there to the PR nothing stops.
+   More gates dilute the point of automation; fewer let implementation start before the specification is settled.
+2. **Verdicts are decided only by acceptance criteria numbers.** Pass/fail comes only from mapping to `AC-1`, `AC-2`, ….
+   Verdicts based on impressions never converge.
+3. **If it does not converge, stop and hand it to a human.** After at most 3 rounds it stops and sends a notification.
+   Carrying on automatically turns review into a formality. When a judge concludes that an unmet criterion cannot be fixed
+   by revision at all (contradictory criteria, a wrong premise in the instruction document), it returns `NEEDS_HUMAN` and stops without waiting for more rounds.
+
+**The whole history stays in the Issue comments.** The local `tmp/` is scratch space; if it is lost, the flow can resume from the Issue.
+
+---
+
+## 2. Requirements
+
+### Commands
+
+| Command | Purpose | Check |
+|---|---|---|
+| `claude` | Claude Code CLI, used headlessly (`claude -p`) | `claude --version` |
+| `gh` | GitHub CLI: reading/writing Issues, creating PRs | `gh auth status` |
+| `jq` | Reading Claude's JSON output | `jq --version` |
+| `curl` | Slack / Google Chat notifications (only if you use them) | `curl --version` |
+| `make` | Entry point | `make --version` |
+| `bash` | Running the scripts | `bash --version` |
+
+### About the bash version
+
+The scripts are **written to run on bash 3.2, which ships with macOS.** They avoid 4.x features such as associative arrays and `${x^^}`.
+Using bash 4/5 is fine; keeping 3.2 compatibility makes them run everywhere. CI runs them on both macOS (3.2) and Ubuntu (5.x).
+
+bash 3.2 has a pitfall: **variable name parsing is not multibyte-aware.** If a non-ASCII character directly follows `$x`,
+the first byte of that character is taken into the variable name, and together with `set -u` it fails with `unbound variable`.
+The scripts' messages are in English, but this matters as soon as someone writes a message in another language
+(the flow was first written with Japanese messages, which is where this was found).
+
+```bash
+fail "ブランチ名が不正です（$branch）"   # ✗ fails: the first byte of "（" is read as part of the name
+fail "ブランチ名が不正です（${branch}）" # ✓
+```
+
+**This happens inside error messages, so things work normally and only break when something fails.**
+`scripts/check-scripts.sh` detects this form statically, and it runs before every phase.
+
+### GitHub
+
+- The repository is on GitHub and `gh` is authenticated
+- **You work with Issues.** The flow keeps its state in Issue comments
+- The default branch (the PR base) matches `BASE_BRANCH` in `.ai-flow/config.mk`
+
+### Notifications
+
+Phases run for a long time, so the flow sends a notification at each ending (done / waiting for a human / aborted) and when
+implementation is done. **Notifications are optional, and the command that sends them is yours to choose** (`NOTIFY_CMD`).
+
+| Setting in `.env` | What happens |
+|---|---|
+| Nothing | No notifications. `make` says `Notifications are off` at the start of each phase, so a missing setting does not go unnoticed |
+| Only `SLACK_WEBHOOK_URL` | Slack, through `scripts/notify-slack.sh` (the behavior before `NOTIFY_CMD` existed) |
+| Only `GOOGLE_CHAT_WEBHOOK_URL` | Google Chat, through `scripts/notify-google-chat.sh`. With both URLs set, Slack is used (pick one with `NOTIFY_CMD`) |
+| `NOTIFY_CMD = <command>` | Your command. It wins over the webhook URLs |
+| `NOTIFY_CMD =` (empty) | No notifications, even if a webhook URL is set |
+
+`NOTIFY_CMD` usually goes in `.env` (where notifications go is personal). Putting it in `.ai-flow/config.mk` works too, for a team that shares one
+destination; a value in `.env` wins. `check-env` stops if the command is not executable, or if it is `notify-slack.sh` / `notify-google-chat.sh` without its webhook URL.
+
+#### The contract with `NOTIFY_CMD`
+
+The value is split into words (no quoting, no `~`), like the other commands; paths are relative to the flow directory.
+For a script of your own, an absolute path or `$(AI_FLOW_PROJECT_DIR)/notify.sh` is the easiest
+(`.ai-flow/` is protected from the agents by the tooling check, and the flow directory is a subtree you should not edit).
+
+| Input | Content |
+|---|---|
+| stdin | The body: GitHub markdown as the agents wrote it, followed by the cumulative cost. Convert it to your service's dialect if needed |
+| `AI_FLOW_NOTIFY_KIND` | `done` (a phase finished: PR created, review posted) / `waiting` (a human has to act: the instruction document is ready, questions, not converged, `NEEDS_HUMAN`) / `aborted` (`fail`) / `progress` (implementation done, going on to review) |
+| `AI_FLOW_NOTIFY_TITLE` | One line of plain text, such as `impl aborted`. No emoji or markup |
+| `AI_FLOW_NOTIFY_PHASE` | `spec` / `impl` / `review` / `code-review` / `pr-review` / `create-pr` |
+| `AI_FLOW_NOTIFY_ISSUE_URL` | The Issue URL |
+
+Exit with 0 on success. **A failure only prints a warning; the flow carries on** (a lost notification must not lose the work).
+The flow does not time the command out, so give network calls a limit of their own (`curl --max-time 30`): a command that hangs holds the phase.
+Fields may be added to `AI_FLOW_NOTIFY_*` later; ignore the ones you do not use.
+
+#### Secrets
+
+The agents must not be able to read the notification secret (see "Deny is not isolation" in §6). Name the environment variables that hold secrets in
+`NOTIFY_SECRET_VARS` (default `SLACK_WEBHOOK_URL GOOGLE_CHAT_WEBHOOK_URL`). The `Makefile` exports exactly those for `NOTIFY_CMD`, and `claude-run.sh` removes the same
+names from the agents' environment. Variables you define in `.env` are not exported otherwise, so **a name you forget to list means the command
+does not get its secret, never that the agents can read it.** `SLACK_WEBHOOK_URL` and `GOOGLE_CHAT_WEBHOOK_URL` are always removed.
+
+If `.env` refers to a shell variable for the URL (`GOOGLE_CHAT_WEBHOOK_URL = $(MY_CHAT_URL)` with `MY_CHAT_URL` set in the shell profile),
+the agents inherit that variable from the shell too, so list it as well: `NOTIFY_SECRET_VARS = GOOGLE_CHAT_WEBHOOK_URL MY_CHAT_URL`.
+
+Keep the secret in `.env` (every `.env` is denied to the `Read` tool) rather than in a file of its own, which the agents could read.
+
+#### Examples
+
+None of these except Slack and Google Chat has been verified with the flow yet.
+
+Discord (its webhooks accept a Slack-compatible payload at `<webhook URL>/slack`, so the Slack script can be reused):
+
+```make
+SLACK_WEBHOOK_URL = https://discord.com/api/webhooks/<id>/<token>/slack
+```
+
+A script of your own, with its secret listed so the agents never see it (`.env`):
+
+```make
+NOTIFY_CMD = $(AI_FLOW_PROJECT_DIR)/notify.sh
+NOTIFY_SECRET_VARS = MY_WEBHOOK_URL
+MY_WEBHOOK_URL = https://...
+```
+
+The macOS notification center (no secret, so nothing to list). Save it as an executable script and point `NOTIFY_CMD` at it:
+
+```bash
+#!/bin/bash
+# The body on stdin is not used: notification banners are short
+osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' \
+  "issue-to-pr-flow" "${AI_FLOW_NOTIFY_KIND}: ${AI_FLOW_NOTIFY_TITLE}"
+```
+
+Google Chat (an Incoming Webhook of a space; [#17](https://github.com/maepon/issue-to-pr-flow/issues/17)). Emoji are sent as Unicode rather than as
+Slack's shortcodes such as `:x:`. A message that is too large is refused, so a body over 8000 characters is cut and
+ends with a note pointing to the Issue:
+
+```make
+GOOGLE_CHAT_WEBHOOK_URL = https://chat.googleapis.com/v1/spaces/<space>/messages?key=<key>&token=<token>
+```
+
+### Models
+
+The flow uses **two tiers**: a **strong model** (`STRONG_MODEL`) for judgment and cross-checking,
+and a **fast model** (`FAST_MODEL`) for the high-volume work. Two lines in the `Makefile` take the defaults from environment variables.
+
+```sh
+export CLAUDE_CODE_OPUS_MODEL=<strong model ID>
+export CLAUDE_CODE_SONNET_MODEL=<fast model ID>
+```
+
+To use different environment variable names, change only those two lines in the `Makefile`.
+If you do not define the environment variables, you can write the IDs in `.env` instead (`.env.example` has commented-out lines).
+
+```make
+STRONG_MODEL = <strong model ID>
+FAST_MODEL = <fast model ID>
+```
+
+Use `=`, not `?=`. The `Makefile` defines them first, so `?=` would not take effect.
+
+Roles:
+
+| Role | Tier | Why |
+|---|---|---|
+| Writing the instruction document, the commit and PR body, code review, Devil's Advocate | Strong | The job is judgment and cross-checking |
+| Implementing, fixing findings | Fast | Lots of work, with concrete instructions (an approved plan, or the findings), checked against tests as it goes |
+| Writing the plan, revising the plan | `PLAN_MODEL` (fast by default) | Lots of work too, but nothing to verify against yet. In one host repository, plans from the fast model kept being sent back for the same kind of finding ("the test does not check the actual output") in a different acceptance criterion each round and stopped at `MAX_ROUNDS`; with the strong model they were not sent back, at about the same cost per plan. To move only the plan to the strong model and keep implementing (the most expensive step) on the fast one: `PLAN_MODEL=strong` |
+| Judging the implementation (review-judge) | `REVIEW_JUDGE_MODEL` (fast by default) | It verifies by running tests and reading diffs, which turned out to be enough for the fast model; switch with `REVIEW_JUDGE_MODEL=strong` |
+| Judging the plan (plan-judge) | `PLAN_JUDGE_MODEL` (follows `REVIEW_JUDGE_MODEL` by default) | It compares documents (instruction vs plan) and cannot verify by running anything, so inferences the prompt does not ask for are the first thing a weaker model loses. To keep it on the strong model while trying review-judge on the fast one: `PLAN_JUDGE_MODEL=strong` |
+
+**The variables are named by capability rather than product name because which phase gets which tier is a policy in `scripts/run-phase.sh`,
+and it is something you actually swap to experiment with** (`REVIEW_JUDGE_MODEL` / `PLAN_JUDGE_MODEL` / `PLAN_MODEL`, §4). The model ID used is printed to stderr for each step,
+so the logs show which one ran.
+
+> **Environment variables set in `.zshrc` are not read by non-interactive shells.** Running `make` from a terminal inherits them,
+> but calling `make` from a non-interactive shell (Claude Code's Bash tool, IDE tasks) treats them as unset.
+> To make them work from anywhere, put them in `.zshenv` or in `.env`.
+
+### Location and `.gitignore`
+
+The flow lives in a **subdirectory of your repository**. The name and depth are up to you (`ai-flow/`, `tools/flow/`, …).
+Scripts and prompts never hard-code the directory name; `scripts/flow-paths.sh` derives it at run time from `git rev-parse --show-prefix`.
+**Placing it at the repository root is not supported** (the flow's `Makefile` / `scripts/` / `docs/` would be indistinguishable from your project's files
+of the same name; `make check` and `run-phase.sh` stop).
+
+The ignore rules the flow needs are in the flow directory's own `.gitignore`. They do not depend on the directory name,
+so there is nothing to add to your root `.gitignore`.
+
+```
+.env
+tmp/
+!.claude/
+!.claude/*-permissions.json
+!.claude/hooks/
+!.claude/hooks/*.sh
+.claude/settings.json
+.claude/settings.local.json
+```
+
+**`tmp/` is essential.** It is where the agents write comment bodies; if it were tracked by git,
+`run-phase.sh`'s working tree check would fire every time and the flow would stop.
+The `!.claude/` lines bring the permission files and the hook back in environments whose global gitignore ignores `.claude`
+(per-directory `.gitignore` files take precedence over the global one).
+
+---
+
+## 3. Installation and setup
+
+### Bring the flow into your repository
+
+```sh
+# at the root of your repository
+tag=vX.Y.Z                                   # a release tag; the latest is at the top of CHANGELOG.md
+git fetch https://github.com/maepon/issue-to-pr-flow.git "refs/tags/$tag"
+c=$(git rev-parse 'FETCH_HEAD^{commit}')     # the tag's commit, read right after your own fetch
+git subtree add --prefix=ai-flow "$c" --squash
+git diff --stat "$c" HEAD:ai-flow            # prints nothing when ai-flow/ is the tag's content
+
+# project settings: copy the template to the root and edit it
+cp -R ai-flow/examples/project/.ai-flow .ai-flow
+```
+
+To update later, fetch the new tag the same way and merge its commit:
+
+```sh
+tag=vX.Y.Z
+git fetch https://github.com/maepon/issue-to-pr-flow.git "refs/tags/$tag"
+c=$(git rev-parse 'FETCH_HEAD^{commit}')
+git subtree merge --prefix=ai-flow "$c" --squash -m "Update ai-flow to $tag"
+git diff --stat "$c" HEAD:ai-flow            # prints nothing when ai-flow/ is the tag's content
+```
+
+Read `CHANGELOG.md` for what changed before bringing in a new tag. Do not edit files under the flow directory in your repository;
+send changes upstream instead (the flow treats its whole directory as tooling, §6).
+
+**Why not `git subtree add/pull <url> <tag>`.** Given a URL, `git subtree` runs `git fetch <url> <tag>` and then reads
+`FETCH_HEAD` back in a separate command. If another process fetches in between — an IDE with automatic fetch enabled
+(VS Code's `git.autofetch`, for example) while the repository is open — `FETCH_HEAD` points to your own `origin` branch,
+and `git subtree` brings in your own repository's content as the flow, ending with `Added dir 'ai-flow'` and no error
+(seen once on git 2.54.0 with VS Code open; the race itself was inferred, not caught). If your root has a `Makefile`,
+`ai-flow/` gets one too, so `make` does not tell you either. The steps above read `FETCH_HEAD` once, right after your own fetch,
+and the `git diff` check catches the remaining window. `git subtree pull` only accepts a URL and a ref, so updates use
+`git subtree merge`, which takes the commit; the squash commit still carries `git-subtree-split:`, so later updates
+find the previous position as before.
+
+### If your default branch requires signed commits
+
+`git subtree` creates the "Squashed '<prefix>/' …" commit — and, for `add`, the merge commit too — unsigned
+(it has no signing option). The subtree PR has to be merged with a merge commit, so those unsigned commits would land on
+the default branch and a "require signed commits" rule blocks the merge. Right after `git subtree add` or `git subtree merge`, run:
+
+```sh
+ai-flow/scripts/resign-subtree-merge.sh
+```
+
+It recreates the two commits signed, with the same tree, parents, message, and author, checks that the tree did not change,
+and only then moves `HEAD` (nothing else in the working tree changes). If they are already signed it does nothing.
+It uses your usual signing setup, like `git commit -S`.
+
+Do **not** use `git rebase --rebase-merges --gpg-sign` for this: rebase re-runs the merge instead of reusing its tree.
+After `git subtree add` that put the subtree's files at the repository root instead of under the prefix (verified),
+and after `merge` / `pull` it only works when git happens to guess the subtree shift.
+
+### Configure
+
+```sh
+cd ai-flow
+cp .env.example .env
+# optional: notifications (SLACK_WEBHOOK_URL, GOOGLE_CHAT_WEBHOOK_URL or NOTIFY_CMD; see Notifications in §2). Makefile syntax; make includes it
+
+make check                   # project settings present, static checks, regression tests (selftest.sh). No cost
+make check-env               # environment variable checks. No cost
+make help                    # list of phases
+```
+
+When `check: static checks of the tooling files passed.` appears, the foundation is in place.
+
+Settings live in two places:
+
+| Location | Contents | Committed |
+|---|---|---|
+| `<flow dir>/.env` | Personal settings (notifications, model IDs) | No |
+| `.ai-flow/` at the root | Project settings: `config.mk` (base branch, test and format commands, output language), `permissions.json` (extra permissions), text embedded in prompts (`context.md` / `risk-catalog.md` / `user-flows.md`), `project-words.txt` | Yes |
+
+The flow directory only contains what is the same for every project. What you adapt to your project is `.ai-flow/` only.
+
+### Things you can check without cost
+
+| Check | Command |
+|---|---|
+| A notification arrives | `printf 'test\n' \| AI_FLOW_NOTIFY_KIND=done AI_FLOW_NOTIFY_TITLE=test AI_FLOW_NOTIFY_ISSUE_URL=http://example.test <your NOTIFY_CMD>` (for Slack, prefix `SLACK_WEBHOOK_URL=<URL>`; for Google Chat, `GOOGLE_CHAT_WEBHOOK_URL=<URL>`) |
+| A notification fires on abort | `NOTIFY_CMD=<command> ./scripts/run-phase.sh bogus-phase 99999 "http://example.test"` (plus the variables your command needs, such as `SLACK_WEBHOOK_URL` or `GOOGLE_CHAT_WEBHOOK_URL`) |
+| The human gate works | `make impl ISSUE=n` on an Issue without an instruction document (stops with `Issue #n has no instruction document`) |
+
+Running `run-phase.sh` directly appends a header line to `tmp/cost-issue<N>.txt`. Use an unused Issue number when trying it,
+and delete `tmp/cost-issue<N>.txt` afterwards.
+
+---
+
+## 4. Usage
+
+| Command | What it does | How it ends |
+|---|---|---|
+| `make spec ISSUE=n` | The strong model reads the Issue and the code and posts **questions** or an **instruction document** | Stops (a human reads it) |
+| `make impl ISSUE=n` | Plan → judge → revise → implement → review → fix → commit and create the PR → code review | A PR exists |
+| `make review ISSUE=n` | Runs only the second half of `impl` (review onwards) | A PR exists |
+| `make code-review ISSUE=n` | Runs only the plain code review of the PR | A comment on the PR |
+| `make pr-review ISSUE=n` | Argues against the PR (Devil's Advocate). Not part of the main flow | A comment on the PR |
+| `make create-pr ISSUE=n` | Retries only the push and PR creation (`create_pr`) | A PR exists |
+| `make check` | Static checks and the regression tests (`scripts/selftest.sh`); runs automatically before each phase | — |
+| `make probe` | Re-checks the Claude Code behaviors in §6 "Pitfalls found by measurement". Costs about $0.30; run it when `claude --version` goes up | A list of results |
+
+Run `review` on its own after `impl` stopped without converging and you fixed things by hand.
+`code-review` on its own is for when the PR exists but posting failed.
+`create-pr` on its own is for when the review is approved and the commit and PR title/body (`pr.md`) are done,
+but the end of `review` failed only because of `create_pr` itself (e.g. `origin/<BASE_BRANCH>` not found).
+Redoing it from `review-judge` would duplicate the review comments on the Issue, so that part is not redone.
+
+Variables: `ISSUE` (target Issue number), `MAX_ROUNDS` (maximum judging rounds, default 3), `BASE_BRANCH` (PR base; the value comes from `.ai-flow/config.mk`),
+`REVIEW_JUDGE_MODEL` (the model judging the implementation, and the plan unless `PLAN_JUDGE_MODEL` is set; accepts `strong` / `fast` or a raw model ID.
+The `Makefile` default is the fast model), `PLAN_JUDGE_MODEL` (the model judging the plan; same values; follows `REVIEW_JUDGE_MODEL` when unset),
+`PLAN_MODEL` (the model writing and revising the plan, not judging it; same values; the fast model when unset, and it does not follow the judges).
+
+You can try whether the fast model is enough for judging (`make impl ISSUE=n REVIEW_JUDGE_MODEL=fast`, the default)
+or switch it back to the strong model (`REVIEW_JUDGE_MODEL=strong`).
+To try one judge while the other stays put, set both: e.g. `PLAN_JUDGE_MODEL = strong` and `REVIEW_JUDGE_MODEL = fast` in `.ai-flow/config.mk`
+keeps plan-judge on the strong model and A/Bs only review-judge. Either can be set in `.ai-flow/config.mk`, `.env`, or on the `make` command line.
+If plans keep stopping at `MAX_ROUNDS` with send-backs, `PLAN_MODEL = strong` moves only the plan's writer and reviser to the strong model;
+implementing and fixing findings stay on `FAST_MODEL`.
+
+### The one place a human steps in
+
+**Only checking the instruction document.**
+
+- **If questions come back** — answer in an Issue comment and re-run `make spec ISSUE=n`
+- **If you want to change the instruction document** — likewise comment on the Issue and re-run `make spec ISSUE=n`
+- **`make impl` without an instruction document stops**
+
+On re-run, spec posts the **full text of the instruction document** with the feedback incorporated. Downstream phases
+read **only the latest** `INSTRUCTION` as the authoritative specification, so older ones become void automatically.
+**A comment with just the difference does not become part of the specification.**
+
+### Issue comment types (AI-TAG)
+
+The `<!-- AI-TAG: … -->` at the top of each comment identifies its type.
+
+| Tag | Written by | Contents |
+|---|---|---|
+| `QUESTION` | spec | Questions to settle the specification |
+| `INSTRUCTION` | spec | The instruction document. **Contains the acceptance criteria (`AC-n`). Downstream phases read only this as the specification** |
+| `PLAN` | plan | Implementation plan and test scenarios |
+| `PLAN_REVIEW` | plan-judge | Verdict on discrepancies with the instruction document |
+| `IMPLEMENTATION_DONE` | implement | Implementation report |
+| `CRITIC_REVIEW` | review-judge | Pass/fail verdict against the acceptance criteria |
+| `RESIDUAL_RISK` | review-judge | Dangers left outside the acceptance criteria (**does not affect the verdict**) |
+| `FIX` | review-fix | What was fixed |
+| `CODE_REVIEW` | code-review | **On the PR.** Code review outside the acceptance criteria (does not affect any verdict) |
+| `DEVILS_ADVOCATE` | pr-review | **On the PR.** Arguments against the acceptance criteria themselves (does not affect any verdict) |
+
+### How to write Issues
+
+The quality of the instruction document becomes the quality of the implementation, and **vague acceptance criteria are exactly what keeps rounds from converging.**
+
+- **Write "what you want" and "why" in the Issue. You do not need to write "how"** — the plan decides the means
+- **Measure the size of an Issue by its number of purposes**, not files or steps. Two purposes, two Issues
+- It is fine to run `make spec` with vague premises. Questions come back, and you answer them there
+
+---
+
+## 5. Verdict design
+
+### Why verdicts use only acceptance criteria numbers
+
+The judges (`plan-judge` / `review-judge`) decide pass/fail only by mapping to `AC-1`, `AC-2`, … in the instruction document.
+"Code quality is low" or "there is a better way to write it" is not grounds for sending it back.
+
+**Verdicts based on impressions never converge.** If reasons to send it back can be invented without end, three rounds will not finish.
+The design has an unavoidable hole in exchange:
+
+> **The reviewer cannot stop defects that the acceptance criteria do not mention.**
+
+When the acceptance criteria are vague, three rounds do not converge and it stops waiting for a human. In that case **fix the instruction document, not the implementation.**
+
+### Outputs that cannot overturn an approval
+
+To fill that hole, there are three outputs that **do not affect the verdict**.
+Keeping them out of the verdict is the point: if they could overturn an approval, verdicts would go back to impressions and stop converging.
+Treat the dangers they surface as **seeds for the next Issues**.
+
+| | Where it appears | Responsibility |
+|---|---|---|
+| `RESIDUAL_RISK` | The Issue (a separate comment from the approving judge) | **Dangers left outside the acceptance criteria.** How each `AC-n` was verified (`verified:run` / `verified:tests` / `verified:inference`) and the walk through the incident catalog (unchecked items marked `unchecked`) |
+| `CODE_REVIEW` | The PR (a separate process at the end of `make impl`) | **Whether the code is correct as code, outside the acceptance criteria.** Four aspects: boundary conditions and type mix-ups, swallowed errors, security (path handling, TOCTOU, unvalidated external input), and paths where normal input causes unexpected errors. No readability or style opinions; only findings with evidence that something breaks or errors |
+| `DEVILS_ADVOCATE` | The PR (only when a human runs `make pr-review`) | **Errors in the acceptance criteria themselves.** Five claims examined one by one: "the purpose is not achieved even with all ACs met", "the tests only rubber-stamp the implementation", "things that used to work no longer do", "it would have been better left out", "the PR body does not match the diff". Claims that did not hold are written up as not holding |
+
+`CODE_REVIEW` is a separate phase because judges that decide only by acceptance criteria numbers
+**structurally cannot catch defects the ACs do not mention.**
+
+`DEVILS_ADVOCATE` has a different responsibility ("question the ACs themselves"), but it tends to be **the single most expensive step per round**,
+so by default it is out of the main flow and run on its own.
+
+### The incident catalog for `RESIDUAL_RISK`
+
+`.ai-flow/risk-catalog.md` holds the incident patterns to walk through (embedded at `{{RISK_CATALOG}}` in `prompts/review-judge.md`).
+**Build this list from incidents that actually happened.** With only generic items it only ever says "nothing in particular",
+so **add to it whenever an incident happens in your repository.**
+
+### Claim 2 of `pr-review` (Devil's Advocate)
+
+To check "do the tests merely rubber-stamp the implementation rather than the specification",
+**it actually breaks one line of the implementation and sees whether the tests fail.** If they do not, those tests do not verify that behavior.
+What it breaks must be restored, so this phase gets a dedicated profile that allows `git restore` (`.claude/pr-review-permissions.json`).
+It runs after the PR is created, so the diff is committed and restore loses nothing.
+
+`scripts/run-phase.sh` catches a forgotten restore by **comparing the working tree before and after**.
+`code-review` goes through the same comparison. It is not supposed to fix code,
+but `Write` / `Edit` are granted without path restrictions, so the rule alone is not a guarantee.
+
+---
+
+## 6. Permission design
+
+The permissions given to the agents are defined by the profiles in `.claude/`.
+
+| File | Phases | Notes |
+|---|---|---|
+| `.claude/phase-permissions.json` | spec / impl / review | The base. Grants `gh issue comment` |
+| `.claude/commit-permissions.json` | PR creation | Adds `git add` / `git commit` / `git switch` |
+| `.claude/pr-review-permissions.json` | code-review / pr-review | Two differences from the base: adds `git restore`, removes `gh issue comment` (the destination is the PR, not the Issue) |
+
+These only contain commands every project uses. Project-specific commands such as tests and formatting go in the `allow` of `.ai-flow/permissions.json`.
+Each time `claude-run.sh` starts claude, `scripts/merge-permissions.sh` adds them to the profile, writes the result to a temporary file,
+and passes it with `--settings` (rules with a `./` prefix such as `Read(./.env)` resolve relative to the current directory,
+not the settings file's location, so they still work from a temporary file; B5 below).
+The merged result is not kept in `tmp/` or elsewhere because an agent could rewrite it to widen the permissions of the next step.
+`check-scripts.sh` checks the permissions after merging, for all three profiles.
+
+`merge-permissions.sh` also adds a PreToolUse hook to every profile: `.claude/hooks/deny-overwrite.sh` **refuses `Write` to a file git tracks**
+and tells the agent to use `Edit` (#58). Copying an existing file through `Write`'s argument does not reproduce it (A3: escapes come back as
+the raw character; a long file hits the output limit and gets cut), and agents rewrote whole files even when the instruction document named the file
+and forbade it. New files, `tmp/` and files the agent created earlier are not tracked, so they pass. Every name along a chain of symlinks is checked
+as well as its target (a chain longer than 10 is refused), a tracked file missing from the working tree is not recreated (even when its whole directory is gone), a name in another case
+is checked as the tracked file where git says the file system ignores case (the macOS default), and `[ ] * ?` in a name are not globs.
+Where it cannot decide (outside a repository) it lets the call through, but a git error inside a repository
+(dubious ownership, a broken config) refuses it: passing would switch the hook off unnoticed. It is run with `bash`, so it works without its executable bit. The permission lists cannot say this (A4),
+which is why it is a hook; it lives under `.claude/` so that agents cannot change it during a step (B1). `make probe` checks it (B10),
+`selftest.sh` checks which paths it refuses, and `check-scripts.sh` checks that every merged profile has it.
+
+### Pitfalls found by measurement
+
+These are counter-intuitive, so **read them before editing a profile.**
+The comment at the top of `scripts/claude-run.sh` keeps a short version, by ID.
+
+**These are measurements against particular versions, not Claude Code's specification.**
+**Unless a row says otherwise, every row was last checked with `make probe` on 2.1.308 (2026-10-30).**
+They may change as versions move, so note `claude --version` when you install, and when it goes up run **`make probe`** (`scripts/probe.sh`).
+It re-checks the rows in throwaway repositories, with seven short runs on a cheap model (about $0.30; they cannot be checked without cost),
+and prints for each ID whether it still holds. It exits with 1 when an assumption the safety relies on (B) no longer holds,
+and with 2 when an item could not be determined (the model did not make the call as asked; re-run it).
+It does not touch your repository, but settings at the user level (`~/.claude`) still apply, as they do in the flow.
+After a run, update the version and date above (and the rows whose result changed).
+
+The rows come in two kinds.
+
+- **A — a workaround for a Claude Code behavior.** If `make probe` says it no longer holds, the workaround may be removable;
+  the last column says where. Removing it is optional: host repositories may still run an older Claude Code, where it is still needed
+- **B — an assumption the safety relies on.** If it no longer holds, the safety is weaker than this document says.
+  `make probe` exits with 1; **do not run the flow until the last column has been dealt with**
+
+Workarounds for other tools (bash 3.2, `git`, `gh`) and the defense in depth ("Deny is not isolation" below, §10) are not listed here:
+they stay whether or not the behavior that prompted them changes.
+
+#### A. Workarounds
+
+| ID | Behavior | Relied on in | If it no longer holds |
+|---|---|---|---|
+| A1 | **Some compound forms are refused even when every part is allowed:** `VAR=value cmd` prefixes, command substitution (`$(…)`), control structures that expand a variable (`for … do cmd $i; done`), and output redirection (`>`, even inside the working directories). `&&`, `;`, pipes, heredocs, `2>&1` and `cd X && cmd` **pass** when every part is allowed (they were refused on earlier versions, and pass since at least 2.1.286). Each part is still checked (B7) | `_rules.md` "How to write shell commands"; §7 "Notes for editing prompts" | Remove the form from the list in `_rules.md`. If a form that passes is refused again, add it back: agents that keep getting denied spin |
+| A2 | With `--add-dir=<repository root>`, `cd` to the root or to a subdirectory passes, and the new current directory **persists** across calls (Claude Code also moves its "Primary working directory"; on 2.1.285 and later. In the trial recorded in #29, whose version was not noted, the current directory went back to the flow directory) | `_rules.md` "Working directory and commands" (stay in the flow directory; `cd` back after moving). Commands in `config.mk` cannot rely on a relative path once the agent has moved | If the move no longer persists, the "`cd` back" instruction can go |
+| A3 | `Write` takes the content as a JSON string: a file written with the text `\u003c` (what JSON encoders such as Go's `encoding/json` write for `<`) contains the raw `<`, and no final newline is added unless the content ends with one. **It also depends on the model**, so `make probe` reports it for reference only. `git diff --no-index -- <a> <b>` exits 0 only when two files are identical, and `git diff:*` is already allowed | `spec.md` (an AC that needs byte equality asks for a human or an allowed copy command), `review-judge.md` (compares with `git diff --no-index`), the copy wrapper in §9 (#44) | The instruction in `spec.md` can be relaxed |
+| A4 | `Write` / `Edit` **rules with a path never match, in allow or deny** (`Write(./**)`, `Write(**)`, `Write(tmp/**)` and absolute forms were all denied; `make probe` checks `Write(tmp/**)`) | Only bare `Write` / `Edit` are granted (the `//write` comments in the profiles). **Write ranges are restricted by the shell's working tree check instead**, and rewriting a tracked file by the `Write` hook (B10) | A path restriction can be added **as an extra layer**. The working tree check stays (§10) |
+| A5a | **No longer holds (2.1.286 and later).** Blocks by deny used to be missing from `permission_denials` and came back only as tool errors (until at least 2.1.243); they now appear there too | `claude-run.sh` reads `permission_denials` (§8) | Nothing to change: the warnings now include blocks by deny |
+| A5b | Even when a tool call is denied, `claude` exits with **0** | `claude-run.sh` reads `permission_denials` and prints them to stderr (§8) | The exit code could be used to notice denials, but reading `permission_denials` keeps working either way |
+| A6 | **No longer holds (2.1.287).** With the **name** `.claude/settings.json`, `permissions.allow` used to be ignored entirely when the workspace was not trusted, even when passed explicitly with `--settings` (only a warning on stderr; exit code 0). With any other file name, both allow and deny work | One of the two reasons the profiles are named `*-permissions.json` (§10) | The naming rule stays: A7 still holds, and hosts may run an older version |
+| A7 | A `deny` in the project's `.claude/settings.json` **also binds sessions that do not pass it**, including the human's interactive sessions (deny blocks without a prompt). `make probe` checks a stand-in (`claude -p` without `--settings`); the interactive case is checked by hand (below) | Why the profiles are not named `settings.json` (§10): you could no longer commit / push yourself | If A6 no longer holds either, the naming rule has no reason left (keeping it costs nothing) |
+| A8 | A relative pattern (`Read(./.env)`, `Read(.env)`) only matches at or under the current directory (the flow directory), not the project root above it. `Read(//**/.env)` matches a file named `.env` anywhere | Every profile denies both (the `//env` comments; "Denies required in every profile" below). Protect other secret files with `Read(//**/<path>)` in `.ai-flow/permissions.json` | If relative patterns match above the current directory, `Read(//**/.env)` could go. Keeping both does no harm |
+| A9 | With the flow directory as the current directory, Bash commands whose arguments point outside it (`git diff -- ../README.md`) are denied, while `Read` / `Write` / `Edit` reach those files | `claude-run.sh` passes `--add-dir=<repository root>` | `--add-dir` could go (look at A2 and B4 together) |
+| A10 | `--add-dir` takes several values: separated by a space, it swallows the prompt that follows (checked without a model call) | `claude-run.sh` uses the `=` form | The note can go (the `=` form does no harm) |
+| A11 | Without `< /dev/null`, `claude -p` waits 3 s for standard input ("no stdin data received in 3s"). Not probed: it is kept anyway | `claude-run.sh` | — |
+
+`claude-run.sh` also passes `--strict-mcp-config`, because headless runs load the MCP connectors linked to the user's claude.ai account
+(their tool descriptions were added to every step's prompt). It is not probed: the flow uses no MCP servers, so it is kept anyway.
+
+#### B. Assumptions the safety relies on
+
+| ID | Behavior | What it protects | If it no longer holds |
+|---|---|---|---|
+| B1 | Claude Code itself blocks writes under `.claude/` (refused as a "sensitive file") | Agents cannot widen their own permissions ("Deny is not isolation" below, safeguard 1). `prompts/` and `scripts/` are not covered, so the working tree check covers them | Agents can rewrite the profiles in `.claude/`. The working tree check still aborts after the step, but the step itself is unprotected: stop and look for another way to keep the profiles out of reach |
+| B2 | `deny Read(./.env)` beats a bare `allow Read` | `.env` cannot be read with `Read` | `.env` becomes readable. Remove the bare `Read` and allow paths instead |
+| B3 | A deny in the colon form is a **prefix match** and beats an allow of the base command too (`Bash(gh pr:*)` blocks both `gh pr comment` and `gh pr create`) | The `git push` / `gh pr` / `rm` / … denies (the `//deny` / `//pr` comments) | The denies leak through longer forms. `push` and `gh pr` are still never granted (§10), but review every allow |
+| B4 | Even with `--add-dir=<repository root>`, `cd` outside the repository is refused, naming the allowed directories | The agents stay inside the repository | Agents can move anywhere: say so in `_rules.md` and look at `--add-dir` again (A9) |
+| B5 | Rules with a `./` prefix resolve relative to the **current directory**, not the settings file's location | The merged profile is written to a temporary file and passed with `--settings`, and `Read(./.env)` still means the flow's `.env` | **`Read(./.env)` stops working silently.** `Read(//**/.env)` still blocks it, but other `./` rules in `.ai-flow/permissions.json` need rewriting |
+| B6 | A deny in the profile beats an allow from another settings source, such as a user-level `Bash(git push *)`. `make probe` checks a stand-in (an allow in `.claude/settings.local.json`, since changing `~/.claude` could break the login); the user-level case is checked by hand (below) | The `//deny` of `commit-permissions.json` | An allow in the user's own settings reaches the agents. Remove it from the user settings, or run the flow with a separate `CLAUDE_CONFIG_DIR` |
+| B7 | A compound command is checked **part by part**: in `./allowed && ./not-allowed`, the second part is refused | Relaxing A1 in `_rules.md` | **Anything can run after an allowed command.** Restore the "one simple command per call" rule in `_rules.md` and treat every allow as granting everything |
+| B8 | Input redirection is checked against the `Read` denies: `./allowed < ./.env` is refused | `.env` cannot be read through an allowed command | `.env` becomes readable through any allowed command that reads its standard input |
+| B9 | Commands that Claude Code allows on its own as read-only (`tail`, `cat`, `head`, `grep`: they pass without being in `allow`, e.g. after a pipe) are checked against the `Read` denies: `tail ./.env`, `cat ./.env` and `tail ../.env` are refused | `.env` cannot be read with a command nobody allowed | `.env` becomes readable with `cat`. The rule against allowing these commands ("Allows that must never be granted" below) stays either way: an explicit allow is not probed |
+| B10 | A PreToolUse hook in the profile passed with `--settings` runs in `claude -p`, and its deny decision refuses the call. On 2.1.308 the refusal also appears in `permission_denials` and the reason reaches the agent (`make probe` reports both). The probe `Read`s the file before the `Write`, since Claude Code itself refuses a `Write` to an existing file that was not `Read` | `Write` cannot rewrite a file git tracks (`.claude/hooks/deny-overwrite.sh`, added by `merge-permissions.sh`) | Agents can rewrite whole files again, as in #58. The prompts (`_rules.md`) still forbid it, but that alone did not stop them: look for another way to block it |
+
+#### Checks `make probe` cannot do
+
+Run these by hand when `make probe` shows a change in A7 or B6, or once after installing. Use a scratch repository, not a real one.
+
+- **A7 in an interactive session.** Put `.claude/settings.json` with `{"permissions": {"deny": ["Bash(git status:*)"]}}` in a scratch repository,
+  start `claude` there (trust the folder when asked), and ask it to run `git status`. It holds if the call is refused without asking you.
+  Delete the file afterwards
+- **B6 with user-level settings.** Add `Bash(touch:*)` to `permissions.allow` in your `~/.claude/settings.json` for the check
+  (a command that changes files, so Claude Code does not allow it on its own; read-only commands such as `git log` may pass whatever the rules say).
+  Write a profile that denies it (`{"permissions": {"allow": ["Read"], "deny": ["Bash(touch:*)"]}}`), and in a scratch repository run
+  `claude -p --settings <profile> --output-format json "Run touch b6.txt"`. It holds if the call shows in `permission_denials` and `b6.txt` was not created.
+  Remove the allow from `~/.claude/settings.json` afterwards
+
+### Allows that must never be granted
+
+`scripts/check-scripts.sh` rejects these statically, as written and with a leading absolute path removed
+(`Bash(/bin/cat:*)` is rejected like `Bash(cat:*)`; §9 asks for the absolute-path forms too).
+
+- **`grep` / `cat` / `sed` / `awk` / `head` / `tail` / `cp` / `mv` / `chmod` / `curl` / `ln` / `tee` / `xargs` / `find`** —
+  allowing even one general-purpose command that can read files gets around the `Read(./.env)` deny.
+  Agents try piping into `grep` and get denied; that is expected (they use `Read` instead)
+- **`git -C <path>` / `<command> -C <path>`** — Bash rules match by prefix, so
+  `git -C . push` slips past the `git push` deny
+- **Shells and interpreters in forms that run anything in one command** — `bash` / `sh` / `zsh` / `env` / `eval` / `exec`,
+  bare `python` / `node` / `npx` and the like, one-liners with `-c` / `-e` / `-p`, and `python -m:*` with nothing after it
+  (`python -m http.server` would pass). **Narrowing down what runs passes**, e.g. `python -m pytest:*` or `npx prettier:*`.
+  `npm run:*` is not rejected by the check, but for the same reason spell out the script name, e.g. `npm run lint:*`.
+  The same goes for `groovy` / `kotlin` / `scala`, and for `java` bare or with nothing after `-jar` / `-cp` / `-classpath` / `--class-path` / `--source`
+  (`java Foo.java` runs a source file); `java -jar <a fixed jar>:*` passes. **`jshell` and `jbang` are rejected in every form**: they run whatever they are given
+- **`docker` / `podman`, in every form** — they run any image with any mounts (the whole home directory, the `.env` files).
+  Services the tests need (a database, …) are started by a human before the phase, or by the tests themselves (Testcontainers and the like)
+- **`Bash(git:` / `Bash(gh:` / `Bash(*` / `Bash(:`** — too broad
+
+### Denies required in every profile
+
+If even one is missing, `make check` fails and no phase starts.
+
+```
+Read(./.env)
+Read(//**/.env)
+Bash(git push)
+Bash(git push:*)
+Bash(gh pr:*)
+Bash(rm:*)
+Bash(git rebase:*)
+Bash(git reset --hard:*)
+```
+
+### Deny is not isolation
+
+**As long as running the tests is allowed, the agents can execute arbitrary code.**
+For example, the `.env` denies stop the `Read` tool, but a test or script the agent writes could still read those files.
+If they wanted to, they could reach denied operations. The permission lists prevent accidents; they are not a sandbox.
+
+The effective safeguards are these three. **Do not remove any of them.**
+
+1. **Claude Code itself blocks writes to `.claude/`** — agents cannot widen their own permissions
+2. **`scripts/run-phase.sh` checks the working tree after each step and aborts if tooling files were modified**
+3. **`push` and `gh pr` are not given at all; `run-phase.sh` runs them after checking** —
+   it mechanically verifies the branch naming rule and that no tooling files are mixed into the project's commits.
+   Blocking dangerous push forms by enumerating permission rules leaks, so they are simply not granted
+
+Therefore **do not leave secrets in the environment variables passed to the agents.**
+The `Makefile` exports the notification secrets named in `NOTIFY_SECRET_VARS` for `NOTIFY_CMD`, so `claude-run.sh` removes the same names
+(and always `SLACK_WEBHOOK_URL` and `GOOGLE_CHAT_WEBHOOK_URL`) with `env -u` (otherwise `echo` could read them and the `Read(./.env)` deny would be pointless).
+
+### Protecting the tooling files
+
+After each step, `run-phase.sh` looks at the working tree and aborts if **tooling files** were modified:
+**everything under the flow directory**, plus `.ai-flow/` and `.gitignore` at the root.
+The flow directory is the content of this repository brought in with subtree, so a project change has no business modifying anything in it
+(the agents' scratch files in `tmp/` and each person's `.env` are ignored by the flow's `.gitignore`, so they do not show up in the check).
+`.ai-flow/`, unlike `.claude/`, is not write-protected by Claude Code itself, so this check is its only safeguard.
+The root `.gitignore` holds no flow rules, but it stays protected: a rule ignoring the flow directory would hide new files placed there from this check.
+git reports paths relative to the repository root even when run from the flow directory, so `TOOLING_PATHS` is built with
+the `FLOW_PREFIX` found by `flow-paths.sh` (escaped for use in a regular expression).
+Since `Write` / `Edit` cannot be restricted by path, this is the only safeguard.
+
+What counts is defined by `TOOLING_PATHS` in `run-phase.sh`. The same list shown to the agents is in
+`prompts/_rules.md` and `prompts/pr.md`; when changing it, keep all three in sync.
+
+### Keep project words out of the shared part
+
+`make check` looks for the words listed in `.ai-flow/project-words.txt` in `prompts/*.md` and `.claude/*-permissions.json`
+(whole words, case-insensitive). The shared part is used by other projects too, so writing one project's commands or circumstances there
+gives the agents wrong instructions in other projects.
+The word list lives on the project side, so wherever the flow is installed, the check works with that project's words.
+If something is found, move it to an `.ai-flow/` file (such as `context.md`) or make it a placeholder.
+
+The same check also looks at whether the source files in the working tree pass the formatter (aborts if not).
+**Formatting is done by the agents, not the shell.** If the shell rewrote the diff,
+what the reviewer read and the actual diff would differ.
+
+> **Do not touch the tooling files while a phase is running.**
+> The check treats a human's edit as the agent's and aborts. The work is not lost when it stops;
+> you can resume with `make review` and the like.
+
+### How commits are split
+
+**Tooling files** (the targets of `TOOLING_PATHS` above) come in through **their own PRs, made by humans** (never through this flow).
+**Project changes** go on a `feature/` branch and into a PR. **The two are never mixed in one commit.**
+
+`run-phase.sh` checks this right before creating the PR and aborts without creating it if they are mixed.
+It also checks at the very start of `impl` and `review`, before the instruction document is fetched, so tooling commits that are
+already there stop the phase before anything is charged: a `git subtree` update or an `.ai-flow/` edit committed on the local
+`BASE_BRANCH` and not pushed yet (or its PR not merged yet), carried along by a project branch cut from it.
+Both checks look at the diff from where the branch forked off `origin/<BASE_BRANCH>` (`origin/<BASE_BRANCH>...HEAD`, what the PR would show),
+so tooling updates that landed on `origin/<BASE_BRANCH>` after the fork do not count. A `BASE_BRANCH` ahead of `origin` is not a reason
+to stop by itself (when `review` is resumed, the agent's own commits are ahead too).
+
+---
+
+## 7. File layout
+
+```
+Makefile                             Entry point (make help). Includes .ai-flow/config.mk at the repository root
+.gitignore                           Ignore rules for the flow (tmp/, .env, bringing back the permission files)
+.env.example                         Template for personal settings (→ copy to .env)
+README.md / CHANGELOG.md             Overview / changes per tag
+LICENSE / CONTRIBUTING.md            MIT license / how changes to the flow are made
+
+scripts/
+  run-phase.sh                       The flow's script: phase progression, checks, push, PR creation, notifications
+  claude-run.sh                      Runs Claude Code headlessly once. Measurement notes on permissions at the top
+  render-prompt.sh                   Fills prompt placeholders (called by claude-run.sh)
+  flow-paths.sh                      Finds where the flow directory is (sourced by the scripts)
+  merge-permissions.sh               Adds the project's extra permissions to a profile (called by claude-run.sh)
+  check-scripts.sh                   Static checks of the tooling files (run before each phase)
+  selftest.sh                        Regression tests for run-phase.sh functions and render-prompt.sh (called by check-scripts.sh;
+                                     gh / npx / claude / curl are stubbed; runs throwaway repositories with the flow at ai-flow/ and tools/ai.flow/)
+  ci-check.sh                        Runs make check in this repository by laying files out like a host repository (local and CI)
+  probe.sh                           Re-checks the measured Claude Code behaviors in throwaway repositories (make probe; costs money)
+  resign-subtree-merge.sh            Signs the commits git subtree add / merge --squash created, keeping their trees (§3)
+  notify-slack.sh                    Slack notification (the default NOTIFY_CMD when SLACK_WEBHOOK_URL is set)
+  notify-google-chat.sh              Google Chat notification (the default NOTIFY_CMD when only GOOGLE_CHAT_WEBHOOK_URL is set)
+
+prompts/
+  _rules.md                          Common rules appended to every phase
+  spec.md                            Writes questions OR an instruction document (with acceptance criteria)
+  plan.md                            Writes the implementation plan and test scenarios
+  plan-judge.md                      Judges discrepancies between plan and instruction document
+  plan-revise.md                     Revises the plan after findings
+  implement.md                       Implements
+  review-judge.md                    Pass/fail against the acceptance criteria + RESIDUAL_RISK
+  review-fix.md                      Fixes findings
+  pr.md                              Creates the branch, commits, writes the PR title and body
+  code-review.md                     Code review outside the acceptance criteria (posted on the PR)
+  pr-review.md                       Arguments against the acceptance criteria themselves (posted on the PR)
+
+.claude/
+  phase-permissions.json             Permissions for spec / impl / review
+  commit-permissions.json            Permissions for the PR creation phase
+  pr-review-permissions.json         Permissions for code-review / pr-review
+  hooks/deny-overwrite.sh            Refuses Write to files git tracks (merge-permissions.sh adds it to every profile)
+
+docs/
+  setup.md                           This guide
+  guide.md / guide.ja.md             User guide for day-to-day use (English / Japanese)
+  setup-with-agent.md                Installation steps for a coding agent (§3 and §9, in order, with what to ask the human)
+
+examples/project/.ai-flow/           Template for project settings (copy to your repository root)
+examples/go/.ai-flow/                Wrappers for Go with several modules: go-test.sh, gofmt-check.sh, gofmt-file.sh (§9)
+examples/java/.ai-flow/              Settings for Java (Gradle / Maven): config.mk, permissions.json, context.md, project-words.txt,
+                                     java-scratch.sh + scratch-classpath.gradle for SCRATCH_TEST_CMD (§9)
+
+.github/workflows/check.yml          CI for this repository (inert inside a host repository)
+
+<repository root>/.ai-flow/          Project settings (outside the flow directory)
+  config.mk                          Base branch, test and format commands, output language
+  permissions.json                   Extra permissions (added to all three profiles)
+  context.md                         Project context (embedded at the end of _rules.md)
+  risk-catalog.md                    Incident catalog (embedded in review-judge.md)
+  user-flows.md                      Normal usage (embedded in Claim 3 of pr-review.md)
+  project-words.txt                  Project words that must not appear in the shared part (make check looks for them)
+
+tmp/                                 Scratch files (not tracked by git; the flow can resume from the Issue if they are lost)
+  verdict-issue<N>.txt               The one-word verdict
+  cost-issue<N>.txt                  Cost spent on this Issue (appended)
+  issue<N>-<prompt name>.md          Comment bodies written by the agents
+  pr-title-issue<N>.txt              PR title
+  pr-body-issue<N>.md                PR body
+```
+
+### How prompts are built
+
+`claude-run.sh` **appends** `prompts/_rules.md` to each prompt, fills the placeholders, and passes the result.
+
+| Placeholder | Contents |
+|---|---|
+| `{{ISSUE}}` | Issue number |
+| `{{VERDICT_FILE}}` | File to write the one-word verdict to |
+| `{{COMMENT_FILE}}` | File to write a comment body to (derived from the prompt name) |
+| `{{PR_TITLE_FILE}}` / `{{PR_BODY_FILE}}` | PR title and body |
+| `{{BASE_BRANCH}}` | PR base branch (`BASE_BRANCH` in `.ai-flow/config.mk`), e.g. `origin/{{BASE_BRANCH}}..HEAD` when reading the diff |
+| `{{TEST_CMD}}` / `{{SCRATCH_TEST_CMD}}` / `{{FORMAT_CHECK_CMD}}` / `{{FORMAT_FILE_CMD}}` / `{{FORMAT_FIX_CMD}}` / `{{FORMAT_GLOBS}}` / `{{OUTPUT_LANG}}` | The values of the same names in `.ai-flow/config.mk` |
+| `{{FLOW_DIR}}` / `{{ROOT_REL}}` | The flow directory (e.g. `ai-flow`) and the relative path from it to the root (e.g. `../`), found by `flow-paths.sh`. Hard-coding the directory name in a prompt fails `make check` |
+| `{{PROJECT_CONTEXT}}` / `{{RISK_CATALOG}}` / `{{USER_FLOWS}}` | A line consisting only of one of these is replaced with the contents of `context.md` / `risk-catalog.md` / `user-flows.md` in `.ai-flow/` |
+
+A block from a line `{{#if NAME}}` to a line `{{/if}}` is conditional: if the value of `NAME` (one of the value placeholders) is empty,
+the whole block is removed; otherwise only the two marker lines are removed. `{{#unless NAME}}` … `{{/unless}}` is the opposite: kept only
+when the value is empty. The prompts use them to drop the formatting steps when the `FORMAT_*` values are empty, and to switch from
+test wording to verification-command wording when `TEST_CMD` is empty. Blocks cannot be nested or span files.
+
+`scripts/render-prompt.sh` does the filling. If a placeholder has an empty value or remains unfilled (outside a removed block),
+it stops before starting claude. `make check` also renders every prompt once to verify this.
+
+**A phase asked for a verdict writes only the single specified word to `{{VERDICT_FILE}}`.**
+If explanations or decoration get mixed in, `make` cannot proceed and stops waiting for a human.
+
+### Notes for editing prompts
+
+- **Prompts are in English; human-facing output is in the `OUTPUT_LANG` language.** Write additions to prompts in English
+  and leave the output language to `OUTPUT_LANG` in `.ai-flow/config.mk`. Text in `.ai-flow/` (such as `context.md`) can stay in the project's language
+- **Labels that later phases search for literally are fixed, language-independent tokens.** These are `verified:run` / `verified:tests` /
+  `verified:inference`, `unchecked`, and `non-blocking`, and the prompts say to write them "as is, untranslated".
+  If they were translated into the output language, the residual-risk summary in the PR body and the like could not pick them up. Things found by meaning, such as section headings, are translated
+- **Wrap anything that depends on an optional setting in a conditional block** (`{{#if FORMAT_CHECK_CMD}}` … `{{/if}}`), so projects
+  without it still render, and give the alternative in `{{#unless …}}` when one is needed (as the test / verification wording does).
+  Keep numbered steps outside the block so the numbering has no gaps when it is removed
+- **`prompts/_rules.md` applies to every phase.** Anything added there is paid for on every step
+- **Some shell forms are denied even when every command in them is allowed** (§6, A1): `VAR=value cmd` prefixes, command substitution,
+  control structures that expand a variable, and output redirection. `&&`, `;`, pipes and heredocs pass when every part is allowed
+  (each part is checked: B7). `_rules.md` lists the denied forms; without this guidance, agents keep getting denied and spin.
+  `cd` is allowed and the current directory persists across calls; `cd` to the root is not blocked either (A2), so `_rules.md` asks the agents
+  to stay in the flow directory because the commands and paths in the prompts are written relative to it, and to `cd` back if they move
+- **`cp` is not allowed** (`cp ./.env /tmp/x` would get around the `Read(./.env)` deny).
+  Agents create test input files with the `Write` tool
+
+---
+
+## 8. Reading why it stopped
+
+There are three ways it ends.
+
+| Ending | Exit code | Notification (`AI_FLOW_NOTIFY_KIND`) | Meaning |
+|---|---|---|---|
+| Ran to completion | 0 | `done` | On to the next step |
+| `halt` (waiting for a human) | **0** | `waiting` | Not a failure. A human reads and decides |
+| `fail` (aborted) | 1 | `aborted` (title `<phase> aborted`) | Unexpected. The message says how to resume |
+
+`halt` exits with 0 because **waiting for a human is not a failure.** Keep this in mind if you wire it into CI.
+
+### Abort messages say how to resume
+
+`fail` messages are written to include "what happened" and "how to fix it, and which command resumes".
+**Nothing is lost.** The implementation in the working tree and the Issue comments remain.
+
+Common ones:
+
+| Message | Cause and remedy |
+|---|---|
+| `Issue #n has no instruction document` | Run `make spec` first; this is the human gate. **If it appears although there is an instruction document**, suspect a SIGPIPE race in `require_instruction` (`run-phase.sh`) caused by large `gh issue view --comments` output. Piping `gh` output straight into `grep -q` can make `grep -q` exit early when the output is large; `gh` gets SIGPIPE (exit code 141), and under `pipefail` the match is treated as a failure. Going through a temporary file avoids it (learned the hard way) |
+| `Unexpected verdict file contents: '…'` | The agent wrote something other than the one-word verdict. Read the Issue comments and decide |
+| `… modified tooling files` | Restore with `git` and re-run. **This also happens if a human touched them during a phase** |
+| `… left files that fail the formatting check` | Apply the formatter, then resume with `make review`. If it appears for formatted files, the formatter is missing or there is a syntax error (a failing check is treated as a stop too) |
+| `The branch name does not start with feature/` | The naming rule. The implementation remains, so recreate the branch |
+| `Tooling files are in commits that are not on origin/…` | At the start of `impl` / `review`, before anything is charged. Tooling commits (a `git subtree` update, an `.ai-flow/` edit) are on the local `BASE_BRANCH` and not on `origin` yet. Push them (or merge their PR) and `git fetch`; if the project branch was cut before that, cut it again from `origin/<BASE_BRANCH>`. Then re-run the same command |
+| `Tooling files are mixed into the project's commits` | At the end of `review`: tooling files went into commits made during the phase. Split them into separate commits and run `make create-pr`. (Up to 0.8.1, tooling updates that landed on `BASE_BRANCH` after the fork also showed up here, reversed; the check now looks at the diff from the fork) |
+| `origin/… not found` | `BASE_BRANCH` in `.ai-flow/config.mk` does not match the default branch. At the start of `impl` / `review` nothing has been charged yet; fix it and re-run. At the end of `review`, resume with `make create-pr` without redoing the review (resuming from `review` duplicates the `review-judge` comments) |
+| `No difference from origin/…` | The agent did not commit. Resume with `make review` |
+| `PR not found` | When running `code-review` / `pr-review` on their own, the current branch has no PR |
+| `… was not approved after <MAX_ROUNDS> rounds` | **This happens when the acceptance criteria are vague.** Revisit the instruction document |
+| `The … verdict asks for a human decision (NEEDS_HUMAN)` | Contradictory acceptance criteria or a wrong premise. Read the options in the latest verdict comment, fix the instruction document and post a new INSTRUCTION, then resume with `make impl` (planning stage) or `make review` (implementation stage). It is a halt, so the exit code is 0 |
+
+### Reading the cost
+
+Costs are **appended** to `tmp/cost-issue<N>.txt`. The `# <date time> <phase>` header lines show where runs switched.
+
+```
+# 2026-09-18 20:02:19 spec
+2.8436212500000004
+# 2026-09-18 20:33:53 impl
+0.91197435
+...
+```
+
+The "cumulative cost" in notifications is the sum of this file. **It is appended
+so that splitting one cycle into `make impl` → `make review` does not erase the first half's record.**
+
+### When you cannot tell why a phase failed
+
+`claude`'s transcripts remain in `~/.claude/projects/<slug of the repository path>/*.jsonl`.
+Reading the end shows what the agent tried and what was denied. **No cost.**
+
+### Permission denial warnings
+
+```
+Warning: 3 disallowed tool call(s) were denied.
+  denied: Bash - cd pkg && npm test
+```
+
+**A denial is not necessarily a failure.** The agent may work around it and finish, so it does not stop;
+it is printed so a human notices. **Add only the ones that recur** to `allow` in `.ai-flow/permissions.json`
+(while respecting "Allows that must never be granted" in §6).
+
+Denials of shell forms that are refused whatever the permissions say (§6, A1) come from **insufficient guidance in `prompts/_rules.md`,
+not from permissions.** The example above was denied on versions before 2.1.286; it passes now when both parts are allowed.
+Denials by a `deny` rule appear in the list too (2.1.286 and later; A5a).
+
+---
+
+## 9. Installation checklist
+
+What to check and adapt for your repository.
+
+### Must do
+
+- [ ] **`.env`** in the flow directory: notifications if you want them (`SLACK_WEBHOOK_URL`, `GOOGLE_CHAT_WEBHOOK_URL`, or `NOTIFY_CMD` and `NOTIFY_SECRET_VARS`; §2)
+- [ ] **Environment variables** for the strong and fast model IDs (defaults read `CLAUDE_CODE_OPUS_MODEL` /
+      `CLAUDE_CODE_SONNET_MODEL`; put them in `.zshenv` or `.env`, not `.zshrc`)
+- [ ] **`.ai-flow/config.mk`** — `BASE_BRANCH`, tests (`TEST_CMD` / `SCRATCH_TEST_CMD`),
+      formatting (`FORMAT_CHECK_CMD` / `FORMAT_FILE_CMD` / `FORMAT_FIX_CMD` / `FORMAT_GLOBS`), `OUTPUT_LANG`.
+      `FORMAT_FILE_CMD` must **exit 0 when the file is formatted**. For tools that answer through their output, such as `gofmt -l`,
+      write a wrapper that answers with the exit code (`examples/go/.ai-flow/gofmt-file.sh` / `gofmt-check.sh`).
+      **It must not format** (check only). If the check itself fails, the flow stops.
+      **If your project has no formatter, leave all four `FORMAT_*` values empty**: the formatting steps disappear from the prompts and the per-file check is skipped
+- [ ] **Commands run from the flow directory** — the agents use the flow directory (e.g. `ai-flow/`) as the current directory,
+      so every command in `config.mk` must work from there. `npm test` / `npm run …` find the root `package.json` by themselves;
+      for other tools, give paths relative to the flow directory (e.g. `python3 -m unittest discover -s ../tests`)
+- [ ] **No single command covers the repository from the flow directory?** (several modules or packages each with their own settings:
+      Go modules without `go.work`, Gradle builds that are not one multi-project build, JS packages with their own configs, ...)
+      `TEST_CMD` and `FORMAT_CHECK_CMD` still have to be **one command** run from the flow directory, because the judges re-run them
+      to verify claims. Write a wrapper that walks the modules, as `examples/go/.ai-flow/go-test.sh` does for Go
+      (`go test ../<module>/...` fails there with "directory prefix … does not contain main module"):
+      - **Put the wrappers in `.ai-flow/` at the root**, e.g. `cp ai-flow/examples/go/.ai-flow/*.sh .ai-flow/`. `.ai-flow/` is tooling,
+        so the working tree check stops an agent that edits them. In the project's own `scripts/` an agent could rewrite the command
+        the judges re-run
+      - **Call them by a path relative to the flow directory** (`../.ai-flow/go-test.sh` for `ai-flow/`, `../../.ai-flow/…` one level deeper),
+        and allow exactly that form in `.ai-flow/permissions.json`, e.g. `"Bash(../.ai-flow/go-test.sh:*)"`, `"Bash(../.ai-flow/gofmt-check.sh)"`,
+        `"Bash(../.ai-flow/gofmt-file.sh:*)"`, plus `"Bash(go test:*)"` if the agents should test one module by hand
+        (checked on Claude Code 2.1.285: these allows let the three wrappers run, and a script in `.ai-flow/` that was not allowed was denied)
+      - The relative path only works from the flow directory. The agents can `cd` elsewhere (into a module, to run its tests),
+        but `_rules.md` asks them to come back before running anything else (§6, "Pitfalls found by measurement")
+- [ ] **Issues that keep real output as fixtures?** (JSON or HTML from a pipeline copied into the test data, and a test that it matches
+      byte for byte.) The agents cannot make such a copy: `cp` is not allowed, and `Write` writes escapes such as `\u003c` back as the raw
+      character (§6, "Pitfalls found by measurement"). `spec.md` then has a human run `cp` before `make impl`, or names a copy command you allow.
+      For the second, put a wrapper in `.ai-flow/` that **fixes both directories and checks the name**, and allow exactly that form,
+      e.g. `"Bash(../.ai-flow/copy-fixture.sh:*)"`:
+      ```bash
+      #!/bin/bash
+      # Copies one file of real output into the test data, byte for byte. Usage: ../.ai-flow/copy-fixture.sh <file name>
+      set -euo pipefail
+      name=$(basename -- "${1:?a file name is required}")          # no directories: ../../.env becomes .env
+      case "${name}" in *.json|*.html) ;; *) echo "copy-fixture: only .json / .html" >&2; exit 2 ;; esac
+      cp -- "../out/${name}" "../testdata/${name}"                 # paths relative to the flow directory
+      ```
+      **Never allow `cp` itself, or a wrapper that takes the source path as given**: `cp ../.env tmp/x` would get around the `.env` deny
+      (§6, "Allows that must never be granted"). Like any allowed command, this keeps accidents out, not a determined agent (§6, "Deny is not isolation")
+- [ ] **Can `SCRATCH_TEST_CMD` run a file under the flow's `tmp/`?** The agents write throwaway checks there and pass the file to it.
+      Interpreted languages run the file directly; for a compiled language the file is outside every source set, so the build tool cannot run it.
+      Java: `examples/java/.ai-flow/java-scratch.sh` compiles the project, asks Gradle or Maven for the test classpath, and runs the file
+      in source-file mode (checked with Spring Boot on Gradle 9.7 and Maven, single and multi-module). Copy the whole directory over the template:
+      `cp ai-flow/examples/java/.ai-flow/* .ai-flow/`. With tests configured, `SCRATCH_TEST_CMD` cannot be left empty (the prompts stop rendering)
+- [ ] **No tests?** Leave `TEST_CMD` and `SCRATCH_TEST_CMD` both empty. The plan then maps each acceptance criterion to a verification
+      command (or a `manual` check with steps) instead of a test, implement runs those commands, and the judges re-run them.
+      The verdict design does not change: it is still decided only by acceptance criteria numbers.
+      **Allow the commands you expect to verify with** (your build, a script that renders the docs, ...) in `.ai-flow/permissions.json`
+- [ ] **`TEST_CMD`** — **if your test tool caches results, add the flag that disables it** (Go `-count=1`, Gradle `test --rerun` (7.6 or later) or `cleanTest test`,
+      Turborepo `--force`, Nx `--skip-nx-cache`, Bazel `--nocache_test_results`).
+      The judges re-run the tests to verify claims, so a replayed earlier success defeats them.
+      Gradle's `--rerun-tasks` works too, but reruns every task, compilation included, which makes each run slower.
+      pytest, Jest, and Maven (Surefire) do not replay results, so nothing is needed for them
+- [ ] **How long does `TEST_CMD` take?** Time it from the flow directory. Claude Code stops a Bash command after 2 minutes by default
+      and 10 minutes at most (`BASH_DEFAULT_TIMEOUT_MS` / `BASH_MAX_TIMEOUT_MS`), and the judges re-run the whole suite.
+      A suite that takes several minutes (common with tests that start an application context or containers) needs those limits raised
+      in the environment `make` runs in (not yet measured with this flow); one that takes longer than the maximum cannot be verified at all.
+      Allow `TEST_CMD` as a prefix (`"Bash(../gradlew -p .. test:*)"`) so the agents can narrow a run to one test class or file while they work
+- [ ] **Toolchains set up in `.zshrc`?** (SDKMAN, jenv, nvm, pyenv, …) The same caveat as the model IDs applies (§2, Models):
+      a non-interactive shell does not read `.zshrc`, so the commands in `config.mk` may not find the right version, or any.
+      Put the setup in `.zshenv`, or pin the version in the build (a Gradle toolchain, `.nvmrc` read by a wrapper, …)
+- [ ] **Commands that do not finish** — do not allow commands that start a server and keep running (`npm start`, a dev server,
+      Gradle `bootRun`, Maven `spring-boot:run`, …): the Bash command times out, and the server may need services the agents cannot start.
+      Say in `.ai-flow/context.md` that behavior is checked through tests (for a web application, tests that call the endpoints in process)
+- [ ] **Secret files other than `.env`** — every `.env` is already denied. If your project keeps secrets in other files, add them to `deny`
+      in `.ai-flow/permissions.json` as `Read(//**/<path>)` (e.g. `Read(//**/config/secrets.yml)`, or `Read(//**/application-local.yml)` for local Spring Boot settings with database passwords);
+      a relative path would only match under the flow directory
+- [ ] **`.ai-flow/permissions.json`** — allows for build, test, and format commands.
+      **Also add the absolute-path forms** found with `which` (agents sometimes call commands by absolute path)
+- [ ] **`.ai-flow/context.md`** — documents to read (conventions, README, …), documents to update,
+      pitfalls specific to your project's commands. It goes into every phase's prompt (the end of `_rules.md`)
+- [ ] **`.ai-flow/user-flows.md`** — the normal usage `pr-review` uses to look for "different results than before" in Claim 3
+- [ ] **`.ai-flow/project-words.txt`** — your project's words that must not appear in the shared part (your language's and tools' command names,
+      product names, main file names). It works without it, but you would not notice project specifics creeping into the shared part
+- [ ] **Branch naming** — `create_pr` in `scripts/run-phase.sh` requires `feature/*`, and `prompts/pr.md` creates `feature/issue-<n>-…`.
+      If you need a different convention, change both upstream (changing only one makes PR creation abort after the agent has committed)
+
+### Fill in over time
+
+- [ ] **`.ai-flow/risk-catalog.md` (incident catalog)** — with only generic items,
+      `RESIDUAL_RISK` only ever says "nothing in particular". Add to it when incidents happen in your repository
+
+### The first cycle
+
+A **small one-file fix** is a good first Issue. What to look at is not the quality of the implementation but these three:
+
+1. Whether `make spec` produces an **instruction document**. If it keeps returning questions, adjust how Issues are written
+2. Whether `make impl` gets through plan judging in **1–2 rounds**. Stopping at 3 means the acceptance criteria are vague
+3. Whether **recurring commands** show up in the permission denial warnings
+
+**One cycle tells you which allows to add.** Adding them from the denial warnings is faster than aiming for perfection up front,
+and does not grant anything unnecessary.
+
+---
+
+## 10. Design that must not change
+
+Things that tend to get cut because "it looks easy", and that **silently** stop working when cut.
+
+| Design | What happens if it is cut |
+|---|---|
+| **Only one human gate, after spec** | More gates dilute the point of automation; fewer let implementation start before the specification is settled |
+| **The instruction tag is searched with a line-start anchor (`'^<!-- AI-TAG: INSTRUCTION -->'`)** | With a partial match, a human comment saying "there is no instruction (AI-TAG: INSTRUCTION)" or a comment discussing this flow passes the gate. **This very sentence has that shape.** `check-scripts.sh` checks that both sides (prompt and shell) agree |
+| **Verdicts are decided only by acceptance criteria numbers** | Mixing in impressions keeps three rounds from converging |
+| **If it does not converge, stop and hand it to a human** | Carrying on automatically turns review into a formality |
+| **`RESIDUAL_RISK` / `CODE_REVIEW` / `DEVILS_ADVOCATE` do not affect verdicts** | If they could overturn an approval, the writers would hold back |
+| **`push` and `gh pr` are not given to the agents** | Blocking dangerous push forms by enumerating permission rules leaks |
+| **The working tree is checked after each step** | `Write` / `Edit` cannot be restricted by path, so this is the only safeguard |
+| **`Write` to a file git tracks is refused by a hook, not only by the prompts** (`.claude/hooks/deny-overwrite.sh`) | Copying a file through `Write` breaks lines nobody meant to change, and agents did it even when the instruction document forbade it by name (#58). The agents cannot restore a file themselves, so every such break stopped the flow for a human |
+| **git output paths are read with `-z`** (`worktree_paths` and `mixed_tooling` in `run-phase.sh`) | Plain `--porcelain` / `--name-only` quote paths containing non-ASCII characters or spaces as `"…"`, so they do not match `^` in `TOOLING_PATHS`. Modified tooling files and tooling mixed into project commits **pass silently** |
+| **A failing notification only warns** (`notify()` in `run-phase.sh`) | If it stopped the flow, a flaky webhook would throw away a finished implementation or review |
+| **Agents format; the shell only checks** | If the shell rewrote the diff, what the reviewer read and the actual diff would differ |
+| **A failing formatting check stops the flow** (`format_ok()` is false on failure) | Judging only by empty output makes a missing formatter or a syntax error that prints nothing count as "formatted", and **everything passes silently** |
+| **The cost log is appended** | Truncating on each start erases the first half of `make impl` → `make review`, and the notified total comes out lower than reality |
+| **The notification secrets (`NOTIFY_SECRET_VARS`) are removed with `env -u`, and one list drives both export and removal** | The `Makefile` exports them for `NOTIFY_CMD`, so otherwise `echo` could read them and the `Read(./.env)` deny would be pointless. Two separate lists would drift: a secret exported but not removed reaches the agents silently |
+| **Variables in error messages are written `${x}`** | bash 3.2 takes the first byte of a non-ASCII character into the variable name. **It happens inside error messages, so it only breaks when something fails** (`check-scripts.sh` checks statically) |
+| **Permission files are not named `settings.json`** | A `deny` in `settings.json` binds the human's interactive sessions too (§6, A7). On versions before 2.1.287, `permissions.allow` was also silently ignored when the workspace was not trusted (A6) |
+| **`grep` / `cat` / `sed` / `cp` / `git -C` are not allowed** | `grep` / `cat` / `sed` / `cp` can read files and get around the `Read(./.env)` deny; `git -C` shifts the prefix match and gets around the `git push` deny |
+| **The flow lives in a subdirectory, and its whole directory is tooling** | At the root, the flow's files and the project's files of the same name cannot be told apart. Listing tooling files by name leaks whatever is added to the flow later (README, examples) |
+| **Phase prompts are rendered by the shell and passed to `claude -p`; they are not Claude Code skills** | The flow is deterministic on purpose: the same settings always produce the same prompt text, unfilled placeholders and conditional blocks fail before any cost, and the human gate, the tooling check, and push / PR creation are enforced by the shell. Skills are loaded at the model's discretion from static Markdown, so moving the phases into skills would give up render-time validation and guaranteed loading, and a skill invoked from an interactive session would bypass every check in `run-phase.sh`. Helpers for the human steps outside the pipeline (drafting an Issue, reading why a phase stopped) could be skills; the phases themselves should not |
