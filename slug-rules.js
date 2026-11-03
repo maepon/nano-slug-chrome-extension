@@ -30,6 +30,13 @@
     "also", "all", "more", "really", "about", "properly", "correctly"
   ]);
 
+  // ドット区切りを1語にまとめない語(後で足せる)。ドットの後ろがこれらなら今まで通りハイフンにする
+  // ドメイン: note.com -> note-com
+  const DOMAIN_SUFFIXES = new Set(["com", "org", "jp"]);
+  // ファイル名の拡張子: package.json -> package-json
+  // js は Node.js など製品名に使われるため入れない
+  const FILE_EXTS = new Set(["json", "html", "md", "yml", "yaml", "txt"]);
+
   const LIMITS = {
     light: { words: 8, len: 60 },
     strong: { words: 5, len: 45 }
@@ -37,13 +44,27 @@
   const MAX_WORDS = LIMITS.light.words;
   const MAX_LEN = LIMITS.light.len;
 
+  // Next.js -> nextjs。ドット1つで、前が英字始まり2文字以上、後ろが英字始まりの時だけまとめる
+  // (3.5 や u.s、amazon.co.jp、ドメイン・拡張子は対象外。ドットは後でハイフンになる)
+  function joinDotted(text) {
+    return text.replace(/[a-z0-9]+(?:\.[a-z0-9]+)+/g, (m) => {
+      const parts = m.split(".");
+      const ok = parts.length === 2 &&
+        /^[a-z][a-z0-9]+$/.test(parts[0]) &&
+        /^[a-z]/.test(parts[1]) &&
+        !DOMAIN_SUFFIXES.has(parts[1]) &&
+        !FILE_EXTS.has(parts[1]);
+      return ok ? parts.join("") : m;
+    });
+  }
+
   function tokenize(text) {
-    return String(text)
+    return joinDotted(String(text)
       .normalize("NFKD")
       .replace(/[̀-ͯ]/g, "")       // アクセント除去
       .toLowerCase()
       .replace(/&/g, " and ")
-      .replace(/['’]/g, "")                   // don't -> dont
+      .replace(/['’]/g, ""))                  // don't -> dont
       .replace(/[^a-z0-9]+/g, " ")
       .trim()
       .split(/\s+/)
