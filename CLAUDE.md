@@ -14,6 +14,14 @@
 | `package.json` | テスト用のみ（devDependencies は playwright だけ）。拡張本体はビルド不要 |
 | `ai-flow/` | [issue-to-pr-flow](https://github.com/maepon/issue-to-pr-flow) を `git subtree` で取り込んだもの。**直接編集しない**（変更は上流へ） |
 | `.ai-flow/` | 上記フローのこのプロジェクト用の設定（テストコマンド、権限、出力言語など） |
+| `renovate.json` | 依存更新（Renovate）。毎週月曜朝にPRを作る。`ai-flow/` は対象外（subtreeで更新するため） |
+
+## リポジトリの運用
+
+- `main` はルールセット `protect-main` で保護している：PR必須（承認0）、強制プッシュ禁止、削除禁止、**署名付きコミット必須**。管理者も例外なし。
+- マージ方法はマージコミットのみ（subtree の履歴を残すため）。
+- 作業は必ずブランチを切ってPRで入れる。
+- Renovate のPRは自動マージしない（CIが無いため）。手元で `npm test` を通してからマージする。playwright の更新後は `npx playwright install chromium` も必要。
 
 ## 候補の作り方（合意済みの仕様）
 
@@ -98,5 +106,5 @@ make impl ISSUE=n   # 計画→実装→レビュー→PR作成
 
 - 設定は `.ai-flow/`（共有・コミットする）と `ai-flow/.env`（個人用・コミットしない。モデルIDと通知）。
 - 整形ツールは無いので `FORMAT_*` は空。出力言語は日本語。
-- **更新:** タグのコミットを `git fetch` してから `git subtree merge --prefix=ai-flow "$c" --squash`（URLとタグを直接渡さない）。手順は `ai-flow/docs/setup-with-agent.md` の Updating。
+- **更新:** タグのコミットを `git fetch` してから `git subtree merge --prefix=ai-flow "$c" --squash`（URLとタグを直接渡さない）。**直後に `ai-flow/scripts/resign-subtree-merge.sh` で再署名する**（main が署名必須のため）。手順は `ai-flow/docs/setup-with-agent.md` の Updating。
 - ai-flow を取り込む・更新するPRは**マージコミットで**マージする（squash・rebase不可。次回の更新が以前の版を見つけられなくなる）。
