@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Nano Slug Generator",
+  "version": "0.1.5",
+  "description": "選択したタイトルから、Chrome内蔵AIでWordPress向けのslug候補を生成します。",
+  "minimum_chrome_version": "138",
+  "permissions": ["activeTab", "scripting", "contextMenus", "clipboardWrite"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "generate-slug": {
+      "suggested_key": {
+        "default": "Alt+S",
+        "mac": "Alt+S"
+      },
+      "description": "選択テキストからslugを生成"
+    }
+  }
+}
