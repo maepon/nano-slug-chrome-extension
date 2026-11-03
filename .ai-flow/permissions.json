@@ -1,0 +1,15 @@
+{
+  "//": "Extra permissions for this project. scripts/merge-permissions.sh adds them to every profile in <flow dir>/.claude/*-permissions.json each time claude starts. Allow the commands in config.mk (tests, formatting) here. make check rejects commands that must never be allowed (general-purpose readers like cat / grep, bare interpreters, git -C, ...); see docs/setup.md. Every .env is already denied by the base profiles; to protect other secret files, add them to deny as Read(//**/<path>), e.g. \"deny\": [\"Read(//**/config/secrets.yml)\"] (a relative path would only match under the flow directory). This project has no formatter. Single test files run through npm run test:<name> (see package.json), not bare node.",
+  "allow": [
+    "Bash(npm test:*)",
+    "Bash(npm run test:*)",
+    "Bash(node --test:*)",
+    "Bash(node --version)",
+    "Bash(npm --version)",
+    "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm test:*)",
+    "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm run test:*)",
+    "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/node --test:*)",
+    "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/node --version)",
+    "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm --version)"
+  ]
+}

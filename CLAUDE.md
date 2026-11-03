@@ -12,6 +12,8 @@
 | `content.js` | 起動時だけ注入される。翻訳、AI生成、Shadow DOMのポップアップ、キー操作、コピー |
 | `tests/` | Node + Playwright のテスト。AI APIは模擬（モック）で置き換えている |
 | `package.json` | テスト用のみ（devDependencies は playwright だけ）。拡張本体はビルド不要 |
+| `ai-flow/` | [issue-to-pr-flow](https://github.com/maepon/issue-to-pr-flow) を `git subtree` で取り込んだもの。**直接編集しない**（変更は上流へ） |
+| `.ai-flow/` | 上記フローのこのプロジェクト用の設定（テストコマンド、権限、出力言語など） |
 
 ## 候補の作り方（合意済みの仕様）
 
@@ -83,3 +85,18 @@ node tests/perf.test.js    # 並行化とセッション使い回し
 ```
 
 `real.test.js` の英訳は、実機のスクリーンショットから推定したものです。
+
+## Issue駆動の開発フロー（ai-flow）
+
+`ai-flow/` に issue-to-pr-flow v0.13.0 を入れてある。使い方は `ai-flow/docs/guide.ja.md`。
+
+```bash
+cd ai-flow
+make spec ISSUE=n   # 指示書（受け入れ基準 AC-n）か質問をIssueに書く。人が読んで判断する
+make impl ISSUE=n   # 計画→実装→レビュー→PR作成
+```
+
+- 設定は `.ai-flow/`（共有・コミットする）と `ai-flow/.env`（個人用・コミットしない。モデルIDと通知）。
+- 整形ツールは無いので `FORMAT_*` は空。出力言語は日本語。
+- **更新:** タグのコミットを `git fetch` してから `git subtree merge --prefix=ai-flow "$c" --squash`（URLとタグを直接渡さない）。手順は `ai-flow/docs/setup-with-agent.md` の Updating。
+- ai-flow を取り込む・更新するPRは**マージコミットで**マージする（squash・rebase不可。次回の更新が以前の版を見つけられなくなる）。
