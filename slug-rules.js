@@ -190,7 +190,76 @@
     return typeof s === "string" && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s) && s.length <= MAX_LEN;
   }
 
-  const api = { toSlug, candidates, sanitize, isValid, tokenize, keywordsFrom, MAX_WORDS, MAX_LEN };
+  // ---------- 題名の言語判定(翻訳の前) ----------
+  // 言語タグを正規化する: 主言語だけにする。zh は文字種が Hant なら zh-Hant。不正なタグは null
+  function normLang(tag) {
+    try {
+      const loc = new Intl.Locale(String(tag));
+      if (!loc.language || loc.language === "und") return null;
+      if (loc.language === "zh") return loc.maximize().script === "Hant" ? "zh-Hant" : "zh";
+      return loc.language;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function normLangs(languages) {
+    const out = [];
+    for (const t of languages || []) {
+      const l = normLang(t);
+      if (l && !out.includes(l)) out.push(l);
+    }
+    return out;
+  }
+
+  function scriptOf(lang) {
+    try { return new Intl.Locale(lang).maximize().script || null; } catch (_) { return null; }
+  }
+
+  const primary = (lang) => String(lang).split("-")[0].toLowerCase();
+
+  // 戻り値 { lang, candidates }。candidates が null なら lang で確定(Language Detector は呼ばない)。
+  // 配列なら Detector で候補から選ぶ(使えない時の代わりの答えが lang。null は判定不能。[] は候補を絞らない)
+  function guessLanguage(text, languages) {
+    const s = String(text || "");
+    const langs = normLangs(languages);
+    if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(s)) return { lang: "ja", candidates: null };
+    if (/\p{Script=Hangul}/u.test(s)) return { lang: "ko", candidates: null };
+    if (/\p{Script=Han}/u.test(s)) {
+      const hit = langs.find((l) => l === "ja" || primary(l) === "zh");
+      return hit ? { lang: hit, candidates: null } : { lang: "ja", candidates: ["ja", "zh"] };
+    }
+    if (/\p{L}/u.test(s.replace(/\p{Script=Latin}/gu, ""))) {
+      const hits = langs.filter((l) => {
+        const sc = scriptOf(l);
+        if (!sc || sc === "Latn") return false;
+        try { return new RegExp(`\\p{Script=${sc}}`, "u").test(s); } catch (_) { return false; }
+      });
+      if (hits.length === 1) return { lang: hits[0], candidates: null };
+      if (hits.length > 1) return { lang: hits[0], candidates: hits };
+      return { lang: null, candidates: [] };
+    }
+    if (!/\p{L}/u.test(s)) return { lang: "en", candidates: null };
+    const latin = langs.filter((l) => scriptOf(l) === "Latn");
+    const others = latin.filter((l) => l !== "en");
+    if (!others.length) return { lang: "en", candidates: null };
+    const candidates = latin.includes("en") ? latin : [...latin, "en"];
+    return { lang: /[^\x00-\x7f]/.test(s) ? others[0] : "en", candidates };
+  }
+
+  // Language Detector の結果(確度の高い順)から、候補に合う最初の言語を選ぶ。無ければ guess.lang
+  function pickDetected(results, guess) {
+    const cands = ((guess && guess.candidates) || []).map(primary);
+    for (const r of results || []) {
+      const lang = normLang(r && r.detectedLanguage);
+      if (!lang) continue;
+      const p = primary(lang);
+      if (cands.length ? cands.includes(p) : p !== "en") return lang;
+    }
+    return guess ? guess.lang : null;
+  }
+
+  const api = { toSlug, candidates, sanitize, isValid, tokenize, keywordsFrom, guessLanguage, pickDetected, MAX_WORDS, MAX_LEN };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.__nanoSlugRules = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
