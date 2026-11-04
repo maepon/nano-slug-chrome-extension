@@ -42,9 +42,11 @@
   3. 保護されていない語（後ろから）
   4. 保護語（後ろから）
   - 先頭からの単純な切り捨てはしない。英語の題名は固有名詞が後ろに来やすいため。
-- **保護語:** 元の日本語にアルファベットで書かれていた語（macOS、Chromeなど）。
+- **保護語:** 元の日本語にアルファベットで書かれていた語（macOS、Chromeなど）。ドット区切りの語は、`tokenize` の結果に加えて、ドットで分けた語も保護する（`Node.js` → `nodejs` / `node` / `js`）。分ける前に所有格を取り除く（`Next.js's` から `jss` を作らない）。
 - **重複語:** 語幹が同じ語（scope/scoped）は**後ろ側を残す**。後ろ側の方が "service workers" のような複合語であることが多いため。大文字の略語（HTTPS/HTTP）は語幹をまとめない。
-- **ドット区切り:** `tokenize` 内の `joinDotted` で、ドットが1つ・前が英字始まりで2文字以上・後ろが英字始まりなら1語にまとめる（`Next.js` → `nextjs`）。まとめないもの：前が1文字（`U.S.`）、数字が絡むバージョン番号、ドット2つ以上（`amazon.co.jp`）、後ろがドメインの語（`DOMAIN_SUFFIXES`: com/org/jp。`note-com`）、後ろが拡張子（`FILE_EXTS`: json/html/md/yml/yaml/txt。`package-json`）。2つの定数は別々で、後で足せる。`js` は `Node.js` などと区別できないので拡張子に入れない。
+- **ドット区切り:** `tokenize` 内の `joinDotted` で、ドットが1つ・前が英字始まりで2文字以上・後ろが英字始まりなら1語にまとめる（`Next.js` → `nextjs`）。まとめないもの：前が1文字（`U.S.`）、数字が絡むバージョン番号、ドット2つ以上（`amazon.co.jp`）、後ろがドメインの語（`DOMAIN_SUFFIXES`: com/org/jp/dev。`note-com`、`zenn-dev`）、後ろが拡張子（`FILE_EXTS`: json/html/md/yml/yaml/txt/css。`package-json`、`style-css`）、前か後ろが `KEEP`（`vs.Vue` → `react-vs-vue`。`VS.Code` も `vs-code` になる）。2つの定数は別々で、後で足せる。`js` は `Node.js` などと区別できないので拡張子に入れない。
+  - `web.dev` や `Normalize.css` のような製品名も分けて `web-dev` になる。誤判定した時の損失が左右で違い、`web-dev` は語が読めて情報も失わないが、`zenndev` は読みにくいため。`net` / `io` は `Socket.IO` などと区別できないので足さない。
+  - **所有格:** ドット区切りの語に付いた `'s` / `’s` は、アポストロフィを取り除く前に取り除く（`Next.js's` → `nextjs`、`package.json's` → `package-json`）。ドットを含まない語（`What's` → `whats`、`Chrome's` → `chromes`）は変えない。
   - バージョン番号は `vue-3-5` のまま。`35` にまとめると「3.5」と「35」の区別がつかなくなるため。
 - **数字の表記揺れ:** 「3-months」と「one-month」が混在するが、**そのままでOK**（ユーザー判断）。
 

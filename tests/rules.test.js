@@ -55,6 +55,45 @@ const tokenizeCases = [
 ];
 for (const [input, expected] of tokenizeCases) eq(`tokenize: ${input}`, R.tokenize(input), expected);
 
+// tokenize: ドット区切りの語の所有格
+const possessiveCases = [
+  ["Next.js's", ["nextjs"]],
+  ["Next.js’s", ["nextjs"]],
+  ["package.json's", ["package", "json"]],
+  ["note.com's", ["note", "com"]],
+  ["Vue 3.5's", ["vue", "3", "5"]],
+  ["amazon.co.jp's", ["amazon", "co", "jp"]],
+  ["U.S.'s market", ["u", "s", "market"]],
+  ["Node.js'", ["nodejs"]],
+  ["What's", ["whats"]],
+  ["Don't", ["dont"]],
+  ["Chrome's", ["chromes"]],
+];
+for (const [input, expected] of possessiveCases) eq(`tokenize: possessive ${input}`, R.tokenize(input), expected);
+
+// tokenize: 常に残す語はドットでまとめない
+const keepCases = [
+  ["vs.Vue", ["vs", "vue"]],
+  ["VS.Code", ["vs", "code"]],
+  ["No.One", ["no", "one"]],
+  ["React.vs", ["react", "vs"]],
+  ["not.a", ["not", "a"]],
+  ["without.any", ["without", "any"]],
+  ["versus.Vue", ["versus", "vue"]],
+  ["never.js", ["never", "js"]],
+  ["non.js", ["non", "js"]],
+];
+for (const [input, expected] of keepCases) eq(`tokenize: keep ${input}`, R.tokenize(input), expected);
+
+// tokenize: css / dev
+const cssDevCases = [
+  ["style.css", ["style", "css"]],
+  ["Normalize.css", ["normalize", "css"]],
+  ["zenn.dev", ["zenn", "dev"]],
+  ["web.dev", ["web", "dev"]],
+];
+for (const [input, expected] of cssDevCases) eq(`tokenize: css/dev ${input}`, R.tokenize(input), expected);
+
 // candidates: [元の日本語, 英訳, light, strong]
 const candidateCases = [
   // ドット区切り・バージョン・ドメイン・ファイル名
@@ -70,6 +109,27 @@ const candidateCases = [
   ["README.mdに目次を付ける", "Add a table of contents to README.md", "add-table-contents-readme-md", null],
   ["index.htmlを分割する", "Split index.html", "split-index-html", null],
   ["GitHub Actionsのworkflow.ymlの書き方", "How to write workflow.yml for GitHub Actions", "how-to-write-workflow-yml-github-actions", "write-workflow-yml-github-actions"],
+  // 所有格・常に残す語・css/dev・保護語の分解
+  ["package.jsonのscriptsの書き方", "How to write package.json's scripts", "how-to-write-package-json-scripts", "write-package-json-scripts"],
+  ["note.comの編集画面", "note.com's editing screen", "note-com-editing-screen", null],
+  ["Next.jsのルーター機能", "Next.js's router features", "nextjs-router-features", null],
+  ["Next.jsのルーター機能", "Next.js’s router features", "nextjs-router-features", null],
+  ["Vue 3.5の新機能", "Vue 3.5's new features", "vue-3-5-new-features", null],
+  ["amazon.co.jpのセール", "amazon.co.jp's sale", "amazon-co-jp-sale", null],
+  ["style.cssのルール", "style.css's rules", "style-css-rules", null],
+  ["Node.jsのエラー処理で実行時に起きる問題を調べて直す", "Investigate and fix runtime problems that occur during error handling in Node", "investigate-fix-runtime-problems-that-occur-during-node", "investigate-fix-runtime-problems-node"],
+  ["Node.jsのエラー処理で実行時に起きる問題を調べて直す", "Investigate and fix runtime problems that occur during error handling in Node.js", "investigate-fix-runtime-problems-that-occur-during-nodejs", "investigate-fix-runtime-problems-nodejs"],
+  ["Next.jsのエラー処理で実行時に起きる問題を調べて直す", "Investigate and fix runtime problems that occur during error handling in Next. js", "investigate-fix-runtime-problems-that-occur-next-js", "investigate-fix-runtime-next-js"],
+  ["Next.jsのエラー処理で実行時に起きる問題を調べて直す", "Investigate and fix runtime problems that occur during error handling in Next js", "investigate-fix-runtime-problems-that-occur-next-js", "investigate-fix-runtime-next-js"],
+  ["Next.jsのエラー処理で実行時に起きる問題を調べて直す", "Investigate and fix runtime problems that occur during error handling in Next", "investigate-fix-runtime-problems-that-occur-during-next", "investigate-fix-runtime-problems-next"],
+  ["Next.jsのエラー処理で実行時に起きる問題を調べて直す", "Investigate and fix runtime problems that occur during error handling in Next.js", "investigate-fix-runtime-problems-that-occur-during-nextjs", "investigate-fix-runtime-problems-nextjs"],
+  ["ReactとVueの比較", "React vs.Vue comparison", "react-vs-vue-comparison", null],
+  ["ReactとVueの比較", "React vs. Vue comparison", "react-vs-vue-comparison", null],
+  ["ReactとVue", "React.vs Vue", "react-vs-vue", null],
+  ["誰も知らない", "No.One knows", "no-one-knows", null],
+  ["何もなしで", "without.any thing", "without-any-thing", null],
+  ["style.cssを分割する方法", "How to split style.css", "how-to-split-style-css", "split-style-css"],
+  ["zenn.devで記事を書く方法", "How to write articles on zenn.dev", "how-to-write-articles-zenn-dev", "write-articles-zenn-dev"],
   // 既存の例(変化なし)
   ["macOSでChrome拡張機能の他言語設定を確認する方法", "How to check other language settings for Chrome extensions on macOS", "how-to-check-language-settings-chrome-extensions-macos", "language-settings-chrome-extensions-macos"],
   ["macOSでChrome拡張機能の他言語設定を確認する方法", "How to check the settings of other languages of Chrome extensions on macOS", "how-to-check-settings-languages-chrome-extensions-macos", "settings-languages-chrome-extensions-macos"],
@@ -86,8 +146,16 @@ for (const [ja, en, light, strong] of candidateCases) {
 }
 
 // keywordsFrom: ドット区切り
-eq("keywordsFrom: Next.jsとNode.jsの違い", [...R.keywordsFrom("Next.jsとNode.jsの違い")].sort(), ["nextjs", "nodejs"]);
-eq("keywordsFrom: package.jsonとNode.js", [...R.keywordsFrom("package.jsonとNode.js")].sort(), ["json", "nodejs", "package"]);
+eq("keywordsFrom: Next.jsとNode.jsの違い", [...R.keywordsFrom("Next.jsとNode.jsの違い")].sort(), ["js", "next", "nextjs", "node", "nodejs"]);
+eq("keywordsFrom: package.jsonとNode.js", [...R.keywordsFrom("package.jsonとNode.js")].sort(), ["js", "json", "node", "nodejs", "package"]);
+const keywordsCases = [
+  ["Next.js'sの違い", ["js", "next", "nextjs"]],
+  ["note.comとzenn.dev", ["com", "dev", "note", "zenn"]],
+  ["ASP.NET Core", ["asp", "aspnet", "core", "net"]],
+  ["Vue 3.5", ["3", "5", "vue"]],
+  ["macOSでChrome", ["chrome", "macos"]],
+];
+for (const [input, expected] of keywordsCases) eq(`keywordsFrom: ${input}`, [...R.keywordsFrom(input)].sort(), expected);
 
 // sanitize: ドット区切り(ハイフンで書かれたものはまとめない)
 const sanitizeCases = [
@@ -95,6 +163,8 @@ const sanitizeCases = [
   ["Next.js App Router", "nextjs-app-router"],
   ["next-js-app", "next-js-app"],
   ["edit package.json", "edit-package-json"],
+  ["next.js's-app-router", "nextjs-app-router"],
+  ["vs.vue-compare", "vs-vue-compare"],
 ];
 for (const [input, expected] of sanitizeCases) eq(`sanitize: ${input}`, R.sanitize(input), expected);
 
