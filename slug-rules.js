@@ -133,14 +133,21 @@
     };
     // "how to" は直訳の特徴なので、汎用語より後・内容語より先に削る
     const isHowTo = (w, i) => (w === "how" && ws[i + 1] === "to") || (w === "to" && ws[i - 1] === "how");
+    // "how to" は2語まとめて削る(to だけ消すと how が1語だけ残るため)
+    const dropHowTo = () => {
+      for (let i = ws.length - 2; i >= 0; i--) {
+        if (ws[i] === "how" && ws[i + 1] === "to") { ws.splice(i, 2); return true; }
+      }
+      return false;
+    };
     const steps = [
-      (w, i) => GENERIC.has(w) && !keep.has(w) && !isHowTo(w, i),
-      (w, i) => isHowTo(w, i),
-      (w) => !keep.has(w) && !KEEP.has(w),
-      () => true
+      () => dropLast((w, i) => GENERIC.has(w) && !keep.has(w) && !isHowTo(w, i)),
+      dropHowTo,
+      () => dropLast((w) => !keep.has(w) && !KEEP.has(w)),
+      () => dropLast(() => true)
     ];
-    for (const pred of steps) {
-      while (!fits() && ws.length > 1 && dropLast(pred)) {}
+    for (const drop of steps) {
+      while (!fits() && ws.length > 1 && drop()) {}
       if (fits()) break;
     }
     return ws.join("-").slice(0, maxLen).replace(/-+$/g, "");

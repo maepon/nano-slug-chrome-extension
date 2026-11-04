@@ -140,6 +140,9 @@ const candidateCases = [
   ["varを使うべきでない理由", "Why you should not use var", "why-you-should-not-use-var", "not-use-var"],
   ["GitHub ActionsでDockerイメージをビルドしてAWS ECRにプッシュする手順", "Steps to build a Docker image with GitHub Actions and push it to AWS ECR", "steps-build-docker-image-github-actions-aws-ecr", "docker-github-actions-aws-ecr"],
   ["猫", "Cat", "cat", null],
+  // 上限超過で "how to" を削る時は2語まとめて削る(how だけ残さない)
+  ["Node.jsのエラー処理で実行時に起きる問題を調べて直す方法", "How to investigate and fix runtime problems that occur during error handling in Node", "investigate-fix-runtime-problems-that-occur-during-node", "investigate-fix-runtime-problems-node"],
+  ["認証とレート制限付きのスケーラブルなREST APIサーバーを作る方法", "How to build a scalable REST API server with authentication and rate limiting", "build-scalable-rest-api-server-authentication-rate-limiting", "build-scalable-rest-api-server"],
 ];
 for (const [ja, en, light, strong] of candidateCases) {
   eq(`candidates: ${ja} / ${en}`, R.candidates(en, ja), { light, strong });
