@@ -31,11 +31,12 @@
   ]);
 
   // ドット区切りを1語にまとめない語(後で足せる)。ドットの後ろがこれらなら今まで通りハイフンにする
-  // ドメイン: note.com -> note-com
-  const DOMAIN_SUFFIXES = new Set(["com", "org", "jp"]);
-  // ファイル名の拡張子: package.json -> package-json
+  // ドメイン: note.com -> note-com, zenn.dev -> zenn-dev
+  // dev は web.dev のような製品名も分けてしまうが、誤判定しても語が読めるので分ける側に倒す
+  const DOMAIN_SUFFIXES = new Set(["com", "org", "jp", "dev"]);
+  // ファイル名の拡張子: package.json -> package-json, style.css -> style-css
   // js は Node.js など製品名に使われるため入れない
-  const FILE_EXTS = new Set(["json", "html", "md", "yml", "yaml", "txt"]);
+  const FILE_EXTS = new Set(["json", "html", "md", "yml", "yaml", "txt", "css"]);
 
   const LIMITS = {
     light: { words: 8, len: 60 },
@@ -53,21 +54,40 @@
         /^[a-z][a-z0-9]+$/.test(parts[0]) &&
         /^[a-z]/.test(parts[1]) &&
         !DOMAIN_SUFFIXES.has(parts[1]) &&
-        !FILE_EXTS.has(parts[1]);
+        !FILE_EXTS.has(parts[1]) &&
+        !KEEP.has(parts[0]) &&
+        !KEEP.has(parts[1]);   // vs.Vue は vs と vue のまま
       return ok ? parts.join("") : m;
     });
   }
 
-  function tokenize(text) {
-    return joinDotted(String(text)
+  // ドット区切りの語の所有格だけ取り除く(Next.js's -> Next.js)。What's や Chrome's は変えない
+  function stripDottedPossessive(lowered) {
+    return lowered.replace(/([a-z0-9]+(?:\.[a-z0-9]+)+\.?)['’]s(?![a-z0-9])/g, "$1");
+  }
+
+  // 小文字化・アクセント除去・所有格の除去まで(アポストロフィはまだ残る)
+  function prepare(text) {
+    return stripDottedPossessive(String(text)
       .normalize("NFKD")
       .replace(/[̀-ͯ]/g, "")       // アクセント除去
       .toLowerCase()
-      .replace(/&/g, " and ")
-      .replace(/['’]/g, ""))                  // don't -> dont
+      .replace(/&/g, " and "));
+  }
+
+  function tokenize(text) {
+    return joinDotted(prepare(text).replace(/['’]/g, ""))   // don't -> dont
       .replace(/[^a-z0-9]+/g, " ")
       .trim()
       .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  // ドットをまとめずに分けた語(Node.js -> node, js)
+  function splitDotted(text) {
+    return prepare(text)
+      .replace(/['’]/g, "")
+      .split(/[^a-z0-9]+/)
       .filter(Boolean);
   }
 
@@ -133,7 +153,7 @@
   // 元テキスト中のアルファベット表記の語(macOS, Chromeなど)。最優先で残す
   function keywordsFrom(original) {
     const latin = String(original || "").match(/[A-Za-z0-9][A-Za-z0-9.'’+-]*/g) || [];
-    return new Set(latin.flatMap((w) => tokenize(w)));
+    return new Set(latin.flatMap((w) => [...tokenize(w), ...splitDotted(w)]));
   }
 
   // level: "light" | "strong" / original: 翻訳前のテキスト(任意)

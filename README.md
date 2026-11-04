@@ -11,10 +11,10 @@
 - `not / no / without / vs` などの否定・比較の語はどの候補でも消しません。
 - 上限は直訳が8語・60文字、短縮が5語・45文字です。
 - 上限を超えた時は、`check` や `other` などの汎用語から削ります。次に `how to`、その次に残りの語を後ろから削ります。
-- 元の日本語にアルファベットで書かれていた語（`macOS`、`Chrome` など）は最後まで残します。
+- 元の日本語にアルファベットで書かれていた語（`macOS`、`Chrome` など）は最後まで残します。ドット区切りの語は分けた形も残すので、`Node.js` は `nodejs` と `node` / `js` のどれで英訳されても残ります。
 - 短縮が直訳より短くならない場合、短縮案は出しません。
 - 語幹が同じ語（scope/scoped、bookmark/bookmarks）の重複は後ろ側を残します。元の日本語で大文字の略語だった語（HTTPS/HTTP）は別の語として扱います。
-- ドットが1つで、前が英字で始まる2文字以上、後ろも英字で始まる語は1語にまとめます（`Next.js` → `nextjs`、`Node.js` → `nodejs`）。次の場合はまとめず、ドットをハイフンにします：前が1文字（`U.S.`）、数字が絡む（`Vue 3.5` → `vue-3-5`、`Node 18.x`）、ドットが2つ以上（`amazon.co.jp`）、後ろが `com` / `org` / `jp`（`note.com` → `note-com`）、後ろが拡張子 `json` / `html` / `md` / `yml` / `yaml` / `txt`（`package.json` → `package-json`）。
+- ドットが1つで、前が英字で始まる2文字以上、後ろも英字で始まる語は1語にまとめます（`Next.js` → `nextjs`、`Node.js` → `nodejs`）。次の場合はまとめず、ドットをハイフンにします：前が1文字（`U.S.`）、数字が絡む（`Vue 3.5` → `vue-3-5`、`Node 18.x`）、ドットが2つ以上（`amazon.co.jp`）、後ろが `com` / `org` / `jp` / `dev`（`note.com` → `note-com`、`zenn.dev` → `zenn-dev`）、後ろが拡張子 `json` / `html` / `md` / `yml` / `yaml` / `txt` / `css`（`package.json` → `package-json`、`style.css` → `style-css`）、前か後ろが `not` / `vs` など常に残す語（`React vs.Vue` → `react-vs-vue`）。ドット区切りの語に付いた所有格は取り除きます（`Next.js's` → `nextjs`）。
 - 英語のテキストを選んだ場合は翻訳しません。
 - AIが使える環境では、空いている番号にAI用の枠（「AI生成中…」と経過秒数）を先に出します。番号とポップアップの高さは途中で変わりません。
 
