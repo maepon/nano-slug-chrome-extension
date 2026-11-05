@@ -73,6 +73,8 @@ Chrome may need to download language detection, translation, and AI models the f
 - Titles are processed with Chrome's built-in APIs. According to [Chrome's documentation](https://developer.chrome.com/docs/ai/get-started), "No data is sent to Google or any third party when using the model."
 - Chrome downloads the models over the network. See [Model downloads](#model-downloads).
 
+For details, see the [privacy policy](PRIVACY_POLICY.md).
+
 ## Permissions
 
 | Permission | Why it's needed |

@@ -73,6 +73,8 @@ Chrome ウェブストアにはまだ公開していません。今すぐ試す�
 - タイトルは Chrome の内蔵APIで処理します。[Chrome のドキュメント](https://developer.chrome.com/docs/ai/get-started)には、「No data is sent to Google or any third party when using the model.」（モデルの使用時に、データが Google や第三者に送信されることはない）とあります。
 - モデルは Chrome がネットワークからダウンロードします。[モデルのダウンロード](#モデルのダウンロード)を参照してください。
 
+詳しくは[プライバシーポリシー](PRIVACY_POLICY.md#プライバシーポリシー)を参照してください。
+
 ## 権限
 
 | 権限 | 使う理由 |
