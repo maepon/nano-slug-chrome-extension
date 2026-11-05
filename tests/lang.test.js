@@ -229,6 +229,33 @@ const mock = (o) => `
   await wait(1000);
   eq("AC-13 Esc後", [await only("T."), await page.evaluate(() => !!document.querySelector("[data-nano-slug]"))], [[], false]);
 
+  // #12: 英字が主の題名は英語として確定(Translator / Detector を呼ばない)
+  for (const [title, languages, slug] of [
+    ["How to use π in JavaScript", ["ja", "en-US"], "how-to-use-javascript"],
+    ["λ calculus basics", ["ja", "en-US"], "calculus-basics"],
+    ["µs timing in Node.js", ["ja", "en-US"], "s-timing-nodejs"],
+    ["What’s new in Chrome", ["fr-FR", "en-US"], "whats-new-chrome"],
+    ["Chrome — release notes", ["fr-FR", "en-US"], "chrome-release-notes"]
+  ]) {
+    const greek = languages[0] === "ja";
+    await start(title, { languages, detector: greek ? "available" : "none", detectLang: "el" });
+    await wait(SETTLE);
+    eq(`#12 ${title}: 英語で確定`, [await only("T."), await only("D."), (await slugs())[0]], [[], [], slug]);
+  }
+
+  // #12: フランス語は翻訳する(Detector なし)
+  await start("Créer une application web avec React", { languages: ["fr-FR", "en-US"], detector: "none" });
+  await wait(SETTLE);
+  eq("#12 Créer…: フランス語は翻訳", [await only("T."), await only("D."), (await slugs())[0]], [["T.availability:fr>en", "T.create:fr>en"], [], EN_SLUG]);
+
+  // #12: 他言語の部分が3文字以上なら今のまま
+  await start("Как установить Node.js", { languages: ["ja", "en-US"], detector: "none" });
+  await wait(SETTLE);
+  eq("#12 Как…: Detectorなしは判定不能", [await slugs(), await status(), await only("T.")], [[], "題名の言語を判定できませんでした", []]);
+  await start("Как установить Node.js", { languages: ["ja", "en-US"], detector: "available", detectLang: "ru" });
+  await wait(SETTLE);
+  eq("#12 Как…: Detectorでru", [await only("T."), (await only("D.")).includes("D.detect"), (await slugs())[0]], [["T.availability:ru>en", "T.create:ru>en"], true, EN_SLUG]);
+
   await browser.close();
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
