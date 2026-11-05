@@ -119,5 +119,6 @@ make impl ISSUE=n   # 計画→実装→レビュー→PR作成
 
 - 設定は `.ai-flow/`（共有・コミットする）と `ai-flow/.env`（個人用・コミットしない。モデルIDと通知）。
 - 整形ツールは無いので `FORMAT_*` は空。出力言語は日本語。
+- `package.json` に `test:<name>` を足したら、`.ai-flow/permissions.json` にも `Bash(npm run test:<name>)` を足す（絶対パスの形も）。`Bash(npm run test:*)` は `npm run test:rules` に一致しないため、1つずつ書いている。
 - **更新:** タグのコミットを `git fetch` してから `git subtree merge --prefix=ai-flow "$c" --squash`（URLとタグを直接渡さない）。**直後に `ai-flow/scripts/resign-subtree-merge.sh` で再署名する**（main が署名必須のため）。手順は `ai-flow/docs/setup-with-agent.md` の Updating。
 - ai-flow を取り込む・更新するPRは**マージコミットで**マージする（squash・rebase不可。次回の更新が以前の版を見つけられなくなる）。
