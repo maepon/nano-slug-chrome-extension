@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
+const { i18nMock } = require("./i18n-mock");
 const ext = (f) => fs.readFileSync(`${require("path").join(__dirname, "..", f)}`, "utf8");
 const mock = `
   window.__clip = null;
@@ -13,7 +14,7 @@ const mock = `
   const setup = async () => {
     await page.goto("data:text/html,<meta charset=utf-8>");
     await page.setContent(`<h1 id="t" contenteditable="true">macOSでChrome拡張機能の他言語設定を確認する方法</h1>`);
-    for (const c of [mock, ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
+    for (const c of [i18nMock("ja"), mock,ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
     await page.focus("#t");
     await page.evaluate(() => { const r = document.createRange(); r.selectNodeContents(t); getSelection().removeAllRanges(); getSelection().addRange(r); });
     await page.evaluate(() => window.__nanoSlug.run());

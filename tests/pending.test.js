@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
+const { i18nMock } = require("./i18n-mock");
 const ext = (f) => fs.readFileSync(`${require("path").join(__dirname, "..", f)}`, "utf8");
 const mock = (en, ai) => `
   window.__clip = null;
@@ -15,7 +16,7 @@ const rows = (page) => page.evaluate(() => [...document.querySelector("[data-nan
   const run = async (ja, en, ai) => {
     await page.goto("data:text/html,<meta charset=utf-8>");
     await page.setContent(`<h1 id="t" contenteditable style="font:28px sans-serif;margin:30px">${ja}</h1>`);
-    for (const c of [mock(en, ai), ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
+    for (const c of [i18nMock("ja"), mock(en, ai),ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
     await page.focus("#t");
     await page.evaluate(() => { const r = document.createRange(); r.selectNodeContents(t); getSelection().removeAllRanges(); getSelection().addRange(r); });
     await page.evaluate(() => { window.__nanoSlug.run(); });

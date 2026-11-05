@@ -5,14 +5,15 @@
   "description": "選択したタイトルからWordPress向けのslug候補を出すChrome拡張（Chrome内蔵AIを使用）",
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
-    "test": "node tests/rules.test.js && node tests/ui.test.js && node tests/ime.test.js && node tests/pending.test.js && node tests/perf.test.js && node tests/lang.test.js",
+    "test": "node tests/rules.test.js && node tests/ui.test.js && node tests/ime.test.js && node tests/pending.test.js && node tests/perf.test.js && node tests/lang.test.js && node tests/i18n.test.js",
     "test:rules": "node tests/rules.test.js",
     "test:real": "node tests/real.test.js",
     "test:ui": "node tests/ui.test.js",
     "test:ime": "node tests/ime.test.js",
     "test:pending": "node tests/pending.test.js",
     "test:perf": "node tests/perf.test.js",
-    "test:lang": "node tests/lang.test.js"
+    "test:lang": "node tests/lang.test.js",
+    "test:i18n": "node tests/i18n.test.js"
   },
   "devDependencies": {
     "playwright": "^1.64.1"

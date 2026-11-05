@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
+const { i18nMock } = require("./i18n-mock");
 const ext = (f) => fs.readFileSync(`${require("path").join(__dirname, "..", f)}`, "utf8");
 // 翻訳500ms / セッション作成800ms / clone 50ms / 生成500ms
 const mock = `
@@ -19,7 +20,7 @@ const mock = `
   page.on("console", (m) => { if (m.text().includes("timing")) logs.push(m.text()); });
   await page.goto("data:text/html,<meta charset=utf-8>");
   await page.setContent(`<h1 id="t">Chrome拡張機能の作り方</h1>`);
-  for (const c of [mock, ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
+  for (const c of [i18nMock("ja"), mock,ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
   for (let i = 0; i < 2; i++) {
     await page.evaluate(() => { const r = document.createRange(); r.selectNodeContents(t); getSelection().removeAllRanges(); getSelection().addRange(r); });
     const t0 = Date.now();

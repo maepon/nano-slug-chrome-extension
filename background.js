@@ -4,13 +4,19 @@
 
 const SCRIPT_FILES = ["slug-rules.js", "content.js"];
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "nano-slug-generate",
-    title: "選択テキストからslugを生成",
-    contexts: ["selection"]
+// メニューの題名は登録時の表示言語で残る。表示言語は再起動で変わるので、起動時にも作り直す
+function registerMenu() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "nano-slug-generate",
+      title: chrome.i18n.getMessage("generateSlug"),
+      contexts: ["selection"]
+    });
   });
-});
+}
+
+chrome.runtime.onInstalled.addListener(registerMenu);
+chrome.runtime.onStartup.addListener(registerMenu);
 
 // 右クリック: どのフレームで選択されたかが info.frameId で分かる
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
