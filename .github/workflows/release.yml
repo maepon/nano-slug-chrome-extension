@@ -1,0 +1,71 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Get version from manifest
+      id: get_version
+      run: |
+        VERSION=$(node -p "require('./manifest.json').version")
+        TAG="${GITHUB_REF#refs/tags/}"
+        if [ "$TAG" != "v$VERSION" ]; then
+          echo "::error::Tag $TAG does not match manifest version $VERSION"
+          exit 1
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+    - name: Create distribution directory
+      run: mkdir -p dist
+
+    - name: Create Chrome Web Store package
+      run: |
+        zip -r "dist/nano-slug-generator-v${{ steps.get_version.outputs.version }}.zip" \
+          manifest.json \
+          background.js \
+          content.js \
+          slug-rules.js \
+          _locales/ \
+          -x "*.DS_Store"
+
+    - name: Verify package contents
+      run: |
+        echo "Package contents:"
+        unzip -l "dist/nano-slug-generator-v${{ steps.get_version.outputs.version }}.zip"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.get_version.outputs.tag }}
+        name: Release ${{ steps.get_version.outputs.tag }}
+        body: |
+          Chrome Web Store package for version ${{ steps.get_version.outputs.version }}
+
+          ## Installation
+          1. Download the zip file below
+          2. Upload to Chrome Web Store or extract it and load it as an unpacked extension
+
+          ## Changes
+          See the [README](https://github.com/${{ github.repository }}/blob/${{ steps.get_version.outputs.tag }}/README.md) for details.
+        draft: false
+        prerelease: false
+        files: |
+          dist/nano-slug-generator-v${{ steps.get_version.outputs.version }}.zip

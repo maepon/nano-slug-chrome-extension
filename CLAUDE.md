@@ -17,6 +17,7 @@
 | `package.json` | テスト用のみ（devDependencies は playwright だけ）。拡張本体はビルド不要 |
 | `ai-flow/` | [issue-to-pr-flow](https://github.com/maepon/issue-to-pr-flow) を `git subtree` で取り込んだもの。**直接編集しない**（変更は上流へ） |
 | `.ai-flow/` | 上記フローのこのプロジェクト用の設定（テストコマンド、権限、出力言語など） |
+| `.github/workflows/release.yml` | `v*` タグのプッシュで、ストア用のZIPを付けた GitHub リリースを作る。タグと `manifest.json` の版が違うと失敗する。ZIPに入れるファイルは列挙しているので、拡張が使うファイルを足したらここにも足す（アイコンも） |
 | `renovate.json` | 依存更新（Renovate）。毎週月曜朝にPRを作る。`ai-flow/` は対象外（subtreeで更新するため） |
 
 ## リポジトリの運用
