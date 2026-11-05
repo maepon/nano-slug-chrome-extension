@@ -2,6 +2,7 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
+const { i18nMock } = require("./i18n-mock");
 const ext = (f) => fs.readFileSync(path.join(__dirname, "..", f), "utf8");
 
 const EN = "How to automatically generate slugs in WordPress";
@@ -78,7 +79,7 @@ const mock = (o) => `
     await page.goto("data:text/html,<meta charset=utf-8>");
     await page.setContent('<h1 id="t" contenteditable></h1>');
     await page.evaluate((t) => { document.getElementById("t").textContent = t; }, title);
-    for (const c of [mock(o), ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
+    for (const c of [i18nMock("ja"), mock(o), ext("slug-rules.js"), ext("content.js")]) await page.addScriptTag({ content: c });
     await page.focus("#t");
     await page.evaluate(() => { const r = document.createRange(); r.selectNodeContents(document.getElementById("t")); getSelection().removeAllRanges(); getSelection().addRange(r); });
     await page.evaluate(() => { window.__nanoSlug.run(); });

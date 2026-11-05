@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
+const { i18nMock } = require("./i18n-mock");
 const ext = (f) => fs.readFileSync(`${require("path").join(__dirname, "..", f)}`, "utf8");
 
 // モック: Translator / LanguageModel
@@ -21,6 +22,7 @@ const mock = (mode) => `
   for (const mode of ["full", "dl", "none"]) {
     await page.goto("data:text/html,<meta charset=utf-8>");
     await page.setContent(`<div style="padding:40px;font:20px sans-serif"><h1 id="t">WordPressでSlugを自動生成する方法</h1></div>`);
+    await page.addScriptTag({ content: i18nMock("ja") });
     await page.addScriptTag({ content: mock(mode) });
     await page.addScriptTag({ content: ext("slug-rules.js") });
     await page.addScriptTag({ content: ext("content.js") });

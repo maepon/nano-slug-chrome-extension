@@ -5,6 +5,8 @@
 
   const MAX_INPUT = 200;
   const R = () => window.__nanoSlugRules;
+  // 文言は chrome.i18n から取る。置換は配列・文字列で渡さないと効かない。キーは文字列リテラルで書く
+  const t = (key, ...subs) => chrome.i18n.getMessage(key, subs.map(String));
 
   let host = null;     // Shadow DOMのホスト要素
   let ui = null;       // { root, list, status }
@@ -92,8 +94,8 @@
     row.className = "item";
     const k = document.createElement("span"); k.className = "key"; k.textContent = String(n);
     const s = document.createElement("span"); s.className = "slug"; s.textContent = text; // innerHTMLは使わない
-    const t = document.createElement("span"); t.className = "tag"; t.textContent = tag;
-    row.append(k, s, t);
+    const g = document.createElement("span"); g.className = "tag"; g.textContent = tag;
+    row.append(k, s, g);
     return row;
   }
 
@@ -119,7 +121,7 @@
     if (!ui || count <= 0) return () => {};
     const rows = [];
     for (let i = 0; i < count; i++) {
-      const row = makeRow(slugs.length + i + 1, "AI生成中…", "");
+      const row = makeRow(slugs.length + i + 1, t("aiGenerating"), "");
       row.classList.add("pending");
       ui.list.appendChild(row);
       rows.push(row);
@@ -127,7 +129,7 @@
     const t0 = performance.now();
     const timer = setInterval(() => {
       const sec = ((performance.now() - t0) / 1000).toFixed(1);
-      rows.forEach((r) => { if (r.classList.contains("pending")) r.querySelector(".tag").textContent = `${sec}秒`; });
+      rows.forEach((r) => { if (r.classList.contains("pending")) r.querySelector(".tag").textContent = t("secondsElapsed", sec); });
     }, 100);
     // 終了時: 埋まらなかった枠は消す(既存の番号には影響しない)
     return () => {
@@ -182,23 +184,23 @@
     }
     if (ok) {
       row?.classList.add("copied");
-      setStatus(`コピーしました: ${text}`);
+      setStatus(t("copied", text));
       setTimeout(closeUI, 700);
     } else {
-      setStatus("コピーに失敗しました");
+      setStatus(t("copyFailed"));
     }
   }
 
   // ---------- 生成 ----------
   const langName = (lang) => {
-    try { return new Intl.DisplayNames(["ja"], { type: "language" }).of(lang) || lang; } catch (_) { return lang; }
+    try { return new Intl.DisplayNames([t("displayLocale")], { type: "language" }).of(lang) || lang; } catch (_) { return lang; }
   };
 
   // ボタンが押されるまで待つ。ポップアップを閉じると押されないまま終わる(続きは実行されない)
   async function waitForClick(message) {
     await new Promise((resolve) => {
       setStatus(message);
-      addButton("ダウンロードして続行", resolve);
+      addButton(t("downloadAndContinue"), resolve);
     });
     ui?.root.querySelectorAll("button").forEach((b) => b.remove());
   }
@@ -213,13 +215,13 @@
       if (avail === "unavailable") return guess.lang;
       if (avail !== "available") {
         // 翻訳モデルと同じく、ダウンロードはユーザー操作(クリック)が必要
-        await waitForClick("言語判定モデルのダウンロードが必要です");
+        await waitForClick(t("detectorDownloadNeeded"));
         if (id !== runId) return guess.lang;
       }
       const detector = await LanguageDetector.create({
         monitor(m) {
           m.addEventListener("downloadprogress", (e) => {
-            if (id === runId) setStatus(`言語判定モデルをダウンロード中… ${Math.round(e.loaded * 100)}%`);
+            if (id === runId) setStatus(t("detectorDownloading", Math.round(e.loaded * 100)));
           });
         }
       });
@@ -242,14 +244,14 @@
     if (avail === "unavailable") throw new Error("TRANSLATOR_UNAVAILABLE");
     if (avail !== "available") {
       // 初回ダウンロードはユーザー操作(クリック)が必要
-      await waitForClick("初回のみ翻訳モデルのダウンロードが必要です");
+      await waitForClick(t("translatorDownloadNeeded"));
       if (id !== runId) return null;
     }
     const translator = await Translator.create({
       ...opts,
       monitor(m) {
         m.addEventListener("downloadprogress", (e) => {
-          if (id === runId) setStatus(`翻訳モデルをダウンロード中… ${Math.round(e.loaded * 100)}%`);
+          if (id === runId) setStatus(t("translatorDownloading", Math.round(e.loaded * 100)));
         });
       }
     });
@@ -283,13 +285,13 @@ Rules:
   let baseSession = null;
 
   async function getSession(timing) {
-    const t = performance.now();
+    const t0 = performance.now();
     if (!baseSession) {
       baseSession = await LanguageModel.create({
         ...AI_OPTS,
         initialPrompts: [{ role: "system", content: SYSTEM_PROMPT }]
       });
-      timing.sessionCreate = Math.round(performance.now() - t);
+      timing.sessionCreate = Math.round(performance.now() - t0);
     }
     const t2 = performance.now();
     try {
@@ -323,14 +325,14 @@ Rules:
   async function generateAI(original, english, lang, id, prep, timing) {
     const avail = await prep.availP;
     if (avail === "none") return { skipped: "" };
-    if (avail === "unavailable") return { skipped: "この環境ではAI候補は使えません" };
+    if (avail === "unavailable") return { skipped: t("aiUnavailable") };
     if (avail !== "available") return { needsDownload: true }; // 巨大なので勝手にダウンロードしない
     const release = reservePending(3 - slugs.length);
     let session = null;
     try {
-      const t = performance.now();
+      const tWait = performance.now();
       session = await prep.sessionP;
-      timing.waitSession = Math.round(performance.now() - t);
+      timing.waitSession = Math.round(performance.now() - tWait);
       const t2 = performance.now();
       const raw = await session.prompt(
         aiInput(original, english, lang),
@@ -340,7 +342,7 @@ Rules:
       if (id !== runId) return {};
       const parsed = JSON.parse(raw);
       const out = (parsed.slugs || []).map((x) => R().sanitize(x));
-      out.forEach((x) => addCandidate(x, "AI"));
+      out.forEach((x) => addCandidate(x, t("tagAi")));
       return {};
     } finally {
       if (session && session !== baseSession) session.destroy?.();
@@ -350,14 +352,14 @@ Rules:
 
   async function downloadPromptModel(original, english, lang, id) {
     ui?.root.querySelectorAll("button").forEach((b) => b.remove());
-    setStatus("AIモデルをダウンロード中…(数GBあります)");
+    setStatus(t("aiDownloadStart"));
     try {
       const s = await LanguageModel.create({
         expectedInputs: [{ type: "text", languages: ["en", "ja"] }],
         expectedOutputs: [{ type: "text", languages: ["en"] }],
         monitor(m) {
           m.addEventListener("downloadprogress", (e) => {
-            if (id === runId) setStatus(`AIモデルをダウンロード中… ${Math.round(e.loaded * 100)}%`);
+            if (id === runId) setStatus(t("aiDownloading", Math.round(e.loaded * 100)));
           });
         }
       });
@@ -369,7 +371,7 @@ Rules:
       setStatus(r.skipped || "");
     } catch (e) {
       console.warn("[nano-slug]", e);
-      if (id === runId) setStatus("AIモデルを準備できませんでした");
+      if (id === runId) setStatus(t("aiPrepareFailed"));
     }
   }
 
@@ -381,7 +383,7 @@ Rules:
     const id = runId;
 
     if (!text) {
-      setStatus("テキストを選択してから実行してください");
+      setStatus(t("selectTextFirst"));
       return;
     }
 
@@ -389,11 +391,11 @@ Rules:
     const t0 = performance.now();
     const prep = prepareAI(timing); // 翻訳と並行してAIの準備を始める
 
-    setStatus("翻訳中…");
+    setStatus(t("translating"));
     const guess = R().guessLanguage(text, navigator.languages);
     const lang = await detectLanguage(text, guess, id);
     if (id !== runId) return;
-    if (!lang) { setStatus("題名の言語を判定できませんでした"); return; }
+    if (!lang) { setStatus(t("langDetectFailed")); return; }
 
     let english;
     try {
@@ -402,31 +404,31 @@ Rules:
     } catch (e) {
       console.warn("[nano-slug]", e);
       const msg = {
-        NO_TRANSLATOR: "このChromeでは翻訳APIが使えません(Chrome 138以降が必要)",
-        TRANSLATOR_UNAVAILABLE: `この環境では${langName(lang)}→英語の翻訳が使えません`
-      }[e.message] || "翻訳に失敗しました";
+        NO_TRANSLATOR: t("noTranslator"),
+        TRANSLATOR_UNAVAILABLE: t("translatorUnavailable", langName(lang))
+      }[e.message] || t("translateFailed");
       setStatus(msg);
       return;
     }
     if (id !== runId || english == null) return;
 
     const { light, strong } = R().candidates(english, text);
-    addCandidate(light, "直訳");
-    if (strong) addCandidate(strong, "短縮");
-    if (!slugs.length) { setStatus("slugを作れませんでした"); return; }
+    addCandidate(light, t("tagLiteral"));
+    if (strong) addCandidate(strong, t("tagShort"));
+    if (!slugs.length) { setStatus(t("slugFailed")); return; }
 
     setStatus("");
     try {
       const r = await generateAI(text, english, lang, id, prep, timing);
       if (id !== runId) return;
       if (r.needsDownload) {
-        addButton("AI候補を有効化(初回ダウンロード)", () => downloadPromptModel(text, english, lang, id));
+        addButton(t("aiEnable"), () => downloadPromptModel(text, english, lang, id));
         return;
       }
       setStatus(r.skipped || "");
     } catch (e) {
       console.warn("[nano-slug]", e);
-      if (id === runId) setStatus("AI候補を生成できませんでした");
+      if (id === runId) setStatus(t("aiGenerateFailed"));
     } finally {
       timing.total = Math.round(performance.now() - t0);
       // 計測: DevToolsのコンソールに出る(単位ms)
