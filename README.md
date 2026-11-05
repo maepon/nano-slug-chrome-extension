@@ -1,108 +1,101 @@
-# Nano Slug Generator（試作 v0.1.5）
+# Nano Slug Generator
 
-選択したタイトルから、WordPress向けのslug候補を最大3つ表示します。
+[日本語](README.ja.md)
 
-題名の言語は日本語に限りません。翻訳の前に言語を判定し、`その言語→英語` で翻訳します。slug は常に英語です。判定は次の順です。
+Select a post title and get up to three English URL slug candidates for WordPress. Press a number key to copy one. Titles can be in Japanese, Korean, Chinese, and other languages. Everything runs on your device with Chrome's built-in AI.
 
-1. かなを含めば日本語、ハングルを含めば韓国語。
-2. 漢字だけなら、ブラウザの言語設定の最初の日本語または中国語（設定に無ければ日本語）。
-3. キリル・タイ・アラビアなどは、ブラウザの言語設定のうち、その文字を使う言語。
-4. ラテン文字だけの題名、またはラテン文字を含み、ラテン文字以外の文字が **2文字以下**（`How to use π in JavaScript` など）で設定の言語の文字種と合わない題名は、設定に英語以外のラテン文字の言語（フランス語など）があれば Language Detector API で判定する。無ければ英語。ラテン文字以外が3文字以上の題名（`Как установить Node.js` など）は、この判定に進まず、Detector に任せる。
-5. 英語と判定したら翻訳しません。
+<!-- TODO: icon and screenshot -->
 
-Language Detector のモデルが未ダウンロードの場合は、翻訳モデルと同じく、ボタンを押した時だけダウンロードします。Language Detector が使えない環境では、ASCII以外のラテン文字（`é` など）があれば設定の英語以外の言語、無ければ英語として扱います。記号や他の文字種だけでは英語以外と判断しません。
-
-**ラテン文字の言語の翻訳には、ブラウザの言語設定が必要です。** 設定に無い言語の題名（設定が日本語と英語だけの時のフランス語など）は英語として扱うので、翻訳されず原文のまま slug になります。翻訳するには、その言語をブラウザの言語設定に追加してください（`chrome://settings/languages`）。
-
-| 候補 | 作り方 | 必要なもの |
+| Selected title | Candidate | Type |
 |---|---|---|
-| 1 直訳 | Translator API で英訳 → 軽め整形（冠詞・前置詞・接続詞・be動詞を除去、`how to` は保持） | Chrome 138+ |
-| 2 短縮 | 同じ英訳 → 強め整形（疑問詞・助動詞・代名詞なども除去） | Chrome 138+ |
-| 3 AI | Prompt API（Gemini Nano）で意訳（`responseConstraint` でJSON固定） | 対応ハードウェア＋モデル |
+| `macOSでChrome拡張機能の他言語設定を確認する方法` | `how-to-check-language-settings-chrome-extensions-macos` | Literal |
+| | `language-settings-chrome-extensions-macos` | Short |
+| | `mac-chrome-extension-language-settings` | AI |
 
-- `not / no / without / vs` などの否定・比較の語はどの候補でも消しません。
-- 上限は直訳が8語・60文字、短縮が5語・45文字です。
-- 上限を超えた時は、`check` や `other` などの汎用語から削ります。次に `how to`（2語まとめて）、その次に残りの語を後ろから削ります。
-- 元の題名にアルファベットで書かれていた語（`macOS`、`Chrome` など）は最後まで残します。ドット区切りの語は分けた形も残すので、`Node.js` は `nodejs` と `node` / `js` のどれで英訳されても残ります。
-- 短縮が直訳より短くならない場合、短縮案は出しません。
-- 語幹が同じ語（scope/scoped、bookmark/bookmarks）の重複は後ろ側を残します。元の題名で大文字の略語だった語（HTTPS/HTTP）は別の語として扱います。
-- ドットが1つで、前が英字で始まる2文字以上、後ろも英字で始まる語は1語にまとめます（`Next.js` → `nextjs`、`Node.js` → `nodejs`）。次の場合はまとめず、ドットをハイフンにします：前が1文字（`U.S.`）、数字が絡む（`Vue 3.5` → `vue-3-5`、`Node 18.x`）、ドットが2つ以上（`amazon.co.jp`）、後ろが `com` / `org` / `jp` / `dev`（`note.com` → `note-com`、`zenn.dev` → `zenn-dev`）、後ろが拡張子 `json` / `html` / `md` / `yml` / `yaml` / `txt` / `css`（`package.json` → `package-json`、`style.css` → `style-css`）、前か後ろが `not` / `vs` など常に残す語（`React vs.Vue` → `react-vs-vue`）。ドット区切りの語に付いた所有格は取り除きます（`Next.js's` → `nextjs`）。
-- 英語のテキストを選んだ場合は翻訳しません。
-- AIが使える環境では、空いている番号にAI用の枠（「AI生成中…」と経過秒数）を先に出します。番号とポップアップの高さは途中で変わりません。
+## Install
 
-## 表示言語
+<!-- TODO: add the Chrome Web Store link after publishing -->
 
-ポップアップ、右クリックメニュー、ショートカットの説明、拡張の説明は、Chrome の表示言語に合わせて切り替わります。対応しているのは**英語と日本語**です。対応していない言語の時は英語で出ます。
+The extension isn't on the Chrome Web Store yet. To try it now, load it from source:
 
-- **題名の言語と表示言語は別です。** 題名の言語は上の判定で決め、表示言語は slug の作り方に影響しません。
-- 文言は `_locales/<言語>/messages.json` にあります。`displayLocale` は、文の中に出す言語名（`French to English…` の `French`）をどの言語で出すかを決めます（その言語の `messages.json` の言語と同じにします）。
-- 言語を足すには、`_locales/<言語>/messages.json` を足すだけです（`en` と同じキーを揃える）。コードの変更は要りません。`npm test` がキーの過不足や置換の名前の食い違いを調べます。
+1. Download or clone this repository.
+2. Open `chrome://extensions` and turn on **Developer mode**.
+3. Click **Load unpacked** and select the repository folder.
 
-## 読み込み
+## Usage
 
-1. `chrome://extensions` を開き、デベロッパーモードをONにする。
-2. 「パッケージ化されていない拡張機能を読み込む」で、このフォルダを選ぶ。
+1. Select a title on the page.
+2. Press **Alt+S** (**Option+S** on Mac), or right-click and choose **Generate slug from selection**.
+3. Press **1–3** or click a candidate to copy it. Press **Esc** to close.
 
-フラグ設定は不要です（Chrome 138以降）。
+You can change the shortcut at `chrome://extensions/shortcuts`.
 
-## 使い方
+## Candidates
 
-1. テキストを選択する。
-2. **Alt+S**（Macは Option+S）を押すか、右クリックの「選択テキストからslugを生成」を選ぶ。
-3. **1〜3キー** を押すかクリックでコピーする。**Esc** で閉じます。
+| Type | How it's made | Requires |
+|---|---|---|
+| Literal | Translates the title, then removes words such as articles and prepositions | Chrome's Translator API |
+| Short | Uses the same translation and removes more words. Hidden if it wouldn't be shorter than Literal | Chrome's Translator API |
+| AI | Gemini Nano suggests a rewritten slug and fills the remaining numbers | Chrome's Prompt API |
 
-ショートカットは `chrome://extensions/shortcuts` で変更できます。
+If the title is already in English, it isn't translated. Words written in Latin letters in the original title, such as `macOS` or `Chrome`, are kept as long as possible. Words such as `not`, `no`, `without`, and `vs` are never removed.
 
-## 権限
+## Requirements
 
-`activeTab` / `scripting` / `contextMenus` / `clipboardWrite` を使います。
+- **Literal and Short:** desktop Chrome 138 or later.
+- **AI (optional):** Chrome also needs to meet the [hardware requirements for Gemini Nano](https://developer.chrome.com/docs/ai/get-started). At the time of writing, these include:
+  - Windows 10/11, macOS 13+, Linux, or ChromeOS on Chromebook Plus
+  - At least 22 GB of free space on the volume with your Chrome profile
+  - A GPU with more than 4 GB of VRAM, or a CPU with 16 GB of RAM and 4 or more cores
+  - An unmetered connection for the first download
 
-`<all_urls>` は使いません。起動した時だけ、そのタブにスクリプトを注入します。
+Mobile browsers aren't supported. If AI isn't available, you still get the Literal and Short candidates.
 
-## 実機で確認してほしいこと（試作の目的）
+## Model downloads
 
-- [ ] 普通のWebページで候補1・2が出るか。content scriptから Translator API が呼べるかの確認です。
-- [ ] 候補3が出るか。content scriptから Prompt API が呼べるかの確認です。出ない場合は、ステータス表示の文言と、DevToolsコンソールの `[nano-slug]` ログを確認してください。
-- [ ] WordPressのブロックエディタでタイトルを選択し、**ショートカット**で動くか。iframe（editor canvas）内の選択を拾えるかの確認です。
-- [ ] 同じく**右クリックメニュー**で動くか。
-- [ ] 初回のモデルダウンロード時に、ボタンを押すと進捗が出て続行できるか。
-- [ ] WordPress上でコピーできるか。iframe内でのClipboard APIを確認します。失敗時は `execCommand` にフォールバックします。
-- [ ] 韓国語・中国語・フランス語の題名を1つずつ選び、英語の slug が出るか。
-- [ ] 日本語の題名の結果が変わらないか。
-- [ ] Language Detector のダウンロードボタンを押した後、content script から判定できるか（`detect()` の戻り値の形の確認を兼ねます）。
-- [ ] 韓国語の題名でもAI候補が出るか（原文を渡さない作りで Prompt API が動くことの確認です）。
-- [ ] 設定が日本語と英語・Language Detector ありで `How to use π in JavaScript` を選択して起動すると、`how-to-use-javascript` が候補に出て、「題名の言語を判定できませんでした」が出ないか。
+Chrome may need to download language detection, translation, and AI models the first time they're used. The extension shows a button and only starts a download after you click it. The AI model is several GB.
 
-- [ ] Chrome の表示言語を英語にして再起動すると、拡張を読み込み直さなくても、ポップアップ（content script からの `chrome.i18n` を含む）、右クリックメニュー、`chrome://extensions/shortcuts` のショートカットの説明、`chrome://extensions` の拡張の説明が英語になるか（macOS はシステム設定の「言語と地域」、それ以外は `chrome://settings/languages`）。
-- [ ] 表示言語を日本語に戻して再起動すると、同じ箇所が今までと同じ日本語になるか。WordPress のブロックエディタ（iframe 内）でも日本語で出るか。
-- [ ] 表示言語をフランス語など未対応の言語にすると、同じ箇所が英語になるか。
+## Languages
 
-## 処理時間の計測
+**Title language.** The extension detects the language from the characters in the title and your browser's language settings (`chrome://settings/languages`):
 
-実行のたびに、DevToolsのコンソールに `[nano-slug] timing(ms)` が出ます。単位はミリ秒です。
+- Japanese kana and Korean Hangul are recognized from the characters alone.
+- Other scripts, such as Chinese characters and Cyrillic, also use your language settings. Language Detector is used if those settings can't decide.
+- For titles in Latin letters, the extension checks for another language only if your settings include a Latin-script language other than English. Otherwise, it treats the title as English.
 
-| 項目 | 意味 |
+**To translate a Latin-script language such as French, add it to your browser's language settings.** Otherwise, the title isn't translated and the slug stays in the original language.
+
+**Display language.** The interface follows Chrome's display language. It's available in English and Japanese, and other display languages use English. The display language doesn't affect slugs.
+
+## Privacy
+
+- The extension makes no network requests and doesn't store your titles or slugs.
+- Titles are processed with Chrome's built-in APIs. According to [Chrome's documentation](https://developer.chrome.com/docs/ai/get-started), "No data is sent to Google or any third party when using the model."
+- Chrome downloads the models over the network. See [Model downloads](#model-downloads).
+
+## Permissions
+
+| Permission | Why it's needed |
 |---|---|
-| reused | 同じページ内でAIセッションを使い回したか |
-| translate | 言語判定と翻訳にかかった時間 |
-| sessionCreate | AIセッションの新規作成にかかった時間（ページ内の初回のみ） |
-| sessionClone | セッションの複製にかかった時間 |
-| waitSession | 翻訳が終わった後、セッションの準備完了を待った時間 |
-| prompt | AIの生成にかかった時間 |
-| total | 全体の時間 |
+| `activeTab` | To read your selection in the current tab when you run the extension |
+| `scripting` | To add the popup to that tab when you run the extension |
+| `contextMenus` | To add the right-click menu item |
+| `clipboardWrite` | To copy the slug you choose |
 
-WordPressの編集画面はiframe内なので、コンソール上部のコンテキスト選択を切り替えないとログが見えない場合があります。
+The extension doesn't use `<all_urls>` and doesn't run on a page until you start it.
 
-## テスト
+## Limitations
 
-```bash
-npm install
-npx playwright install chromium   # 初回のみ
-npm test
-```
+- It's been tested in the WordPress block editor. The classic editor and other CMSs haven't been tested yet.
+- Only the first 200 characters of a selection are used.
+- Short titles in another language may be treated as English even when the language is in your settings.
+- If a title's language can't be detected, or Chrome can't translate from it, no slug is shown.
+- Like other extensions, it can't run on pages such as `chrome://` and the Chrome Web Store.
 
-AI APIは模擬（モック）で置き換えているため、Chrome内蔵AIがない環境でも動きます。`chrome.i18n` も模擬で、`_locales` の英語・日本語を両方確かめます。
+## Development
 
-## 既知の制限・未決事項
+See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, slug rules, and how to add a display language in `_locales/`.
 
-- Prompt APIのモデルが未ダウンロードの場合、自動ではダウンロードしません。ボタンを押した時だけダウンロードします（数GBあるため）。
+## License
+
+[MIT](LICENSE)
