@@ -171,4 +171,50 @@ const sanitizeCases = [
 ];
 for (const [input, expected] of sanitizeCases) eq(`sanitize: ${input}`, R.sanitize(input), expected);
 
+// guessLanguage: 題名の文字とブラウザ設定から言語を決める
+const guessCases = [
+  ["コーヒー", ["zh-CN"], "ja", null],
+  ["macOSで", ["en-US"], "ja", null],
+  ["한국어", ["ja"], "ko", null],
+  ["Next.js 15와", ["ja"], "ko", null],
+  ["猫", ["ja", "en-US"], "ja", null],
+  ["猫", ["zh-CN", "en"], "zh", null],
+  ["貓", ["zh-TW"], "zh-Hant", null],
+  ["猫", ["en-US", "zh-CN", "ja"], "zh", null],
+  ["猫", ["en-US", "en"], "ja", ["ja", "zh"]],
+  ["猫", [], "ja", ["ja", "zh"]],
+  ["Как дела", ["ru-RU", "en"], "ru", null],
+  ["Как дела", ["ru", "uk"], "ru", ["ru", "uk"]],
+  ["Как дела", ["en-US"], null, []],
+  ["สวัสดี", ["th", "ja"], "th", null],
+  ["How to make", ["ja", "en-US", "en"], "en", null],
+  ["How to make", [], "en", null],
+  ["How to make", ["fr-FR", "fr", "en-US", "en"], "en", ["fr", "en"]],
+  ["Bonjour", ["fr"], "en", ["fr", "en"]],
+  ["Comment créer", ["fr-FR", "fr", "en-US", "en"], "fr", ["fr", "en"]],
+  ["Comment créer", ["en-US", "fr"], "fr", ["en", "fr"]],
+  ["Comment créer", ["fr", "de", "en"], "fr", ["fr", "de", "en"]],
+  ["2026 !!", ["fr"], "en", null],
+];
+for (const [text, langs, lang, candidates] of guessCases) {
+  eq(`guessLanguage: ${text} ${JSON.stringify(langs)}`, R.guessLanguage(text, langs), { lang, candidates });
+}
+
+// pickDetected: Language Detector の結果から選ぶ(results は 言語:確度)
+const det = (s) => s.split(",").filter(Boolean).map((x) => { const [l, c] = x.trim().split(":"); return { detectedLanguage: l, confidence: Number(c) }; });
+const pickCases = [
+  ["en:.4, fr:.3", "en", ["fr", "en"], "en"],
+  ["de:.6, fr:.2", "en", ["fr", "en"], "fr"],
+  ["fr-CA:.6", "en", ["fr", "en"], "fr"],
+  ["und:1", "en", ["fr", "en"], "en"],
+  ["zh-Hant:.7", "ja", ["ja", "zh"], "zh-Hant"],
+  ["ru:.8", null, [], "ru"],
+  ["en:.9, ru:.1", null, [], "ru"],
+  ["und:1", null, [], null],
+  ["", null, [], null],
+];
+for (const [results, lang, candidates, expected] of pickCases) {
+  eq(`pickDetected: ${results || "(空)"}`, R.pickDetected(det(results), { lang, candidates }), expected);
+}
+
 process.exit(fail ? 1 : 0);

@@ -5,7 +5,6 @@
 
   const MAX_INPUT = 200;
   const R = () => window.__nanoSlugRules;
-  const hasJa = (s) => /[぀-ヿ㐀-鿿]/.test(s);
 
   let host = null;     // Shadow DOMのホスト要素
   let ui = null;       // { root, list, status }
@@ -191,20 +190,60 @@
   }
 
   // ---------- 生成 ----------
-  async function translate(text, id) {
-    if (!hasJa(text)) return text; // 英語ならそのまま
+  const langName = (lang) => {
+    try { return new Intl.DisplayNames(["ja"], { type: "language" }).of(lang) || lang; } catch (_) { return lang; }
+  };
+
+  // ボタンが押されるまで待つ。ポップアップを閉じると押されないまま終わる(続きは実行されない)
+  async function waitForClick(message) {
+    await new Promise((resolve) => {
+      setStatus(message);
+      addButton("ダウンロードして続行", resolve);
+    });
+    ui?.root.querySelectorAll("button").forEach((b) => b.remove());
+  }
+
+  // 題名の言語を決める。文字とブラウザ設定で決まればDetectorは呼ばない。
+  // Detectorが使えない時・失敗した時は guess.lang(null は判定不能)
+  async function detectLanguage(text, guess, id) {
+    if (guess.candidates === null) return guess.lang;
+    try {
+      if (!("LanguageDetector" in self)) return guess.lang;
+      const avail = await LanguageDetector.availability();
+      if (avail === "unavailable") return guess.lang;
+      if (avail !== "available") {
+        // 翻訳モデルと同じく、ダウンロードはユーザー操作(クリック)が必要
+        await waitForClick("言語判定モデルのダウンロードが必要です");
+        if (id !== runId) return guess.lang;
+      }
+      const detector = await LanguageDetector.create({
+        monitor(m) {
+          m.addEventListener("downloadprogress", (e) => {
+            if (id === runId) setStatus(`言語判定モデルをダウンロード中… ${Math.round(e.loaded * 100)}%`);
+          });
+        }
+      });
+      try {
+        return R().pickDetected(await detector.detect(text), guess);
+      } finally {
+        detector.destroy?.();
+      }
+    } catch (e) {
+      console.warn("[nano-slug]", e);
+      return guess.lang;
+    }
+  }
+
+  async function translate(text, lang, id) {
+    if (lang === "en") return text; // 英語ならそのまま
     if (!("Translator" in self)) throw new Error("NO_TRANSLATOR");
-    const opts = { sourceLanguage: "ja", targetLanguage: "en" };
+    const opts = { sourceLanguage: lang, targetLanguage: "en" };
     const avail = await Translator.availability(opts);
     if (avail === "unavailable") throw new Error("TRANSLATOR_UNAVAILABLE");
     if (avail !== "available") {
       // 初回ダウンロードはユーザー操作(クリック)が必要
-      await new Promise((resolve) => {
-        setStatus("初回のみ翻訳モデルのダウンロードが必要です");
-        addButton("ダウンロードして続行", resolve);
-      });
+      await waitForClick("初回のみ翻訳モデルのダウンロードが必要です");
       if (id !== runId) return null;
-      ui?.root.querySelectorAll("button").forEach((b) => b.remove());
     }
     const translator = await Translator.create({
       ...opts,
@@ -222,7 +261,7 @@
   }
 
   const SYSTEM_PROMPT = `You create short URL slugs for WordPress blog posts.
-Given a post title (Japanese, with an English translation), propose 2 alternative slugs.
+Given a post title (possibly with its original text), and an English translation of it, propose 2 alternative slugs.
 Rules:
 - 2 to 5 English words, lowercase, joined with hyphens.
 - Keep the key topic words. Never drop negation or comparison words (not, without, vs).
@@ -277,7 +316,11 @@ Rules:
     return { availP, sessionP };
   }
 
-  async function generateAI(original, english, id, prep, timing) {
+  // 原文を渡すのは AI_OPTS で宣言した言語(ja / en)だけ。それ以外は英訳だけを渡す
+  const aiInput = (original, english, lang) =>
+    lang === "ja" || lang === "en" ? `Title: ${original}\nEnglish: ${english}` : `English: ${english}`;
+
+  async function generateAI(original, english, lang, id, prep, timing) {
     const avail = await prep.availP;
     if (avail === "none") return { skipped: "" };
     if (avail === "unavailable") return { skipped: "この環境ではAI候補は使えません" };
@@ -290,7 +333,7 @@ Rules:
       timing.waitSession = Math.round(performance.now() - t);
       const t2 = performance.now();
       const raw = await session.prompt(
-        `Title: ${original}\nEnglish: ${english}`,
+        aiInput(original, english, lang),
         { responseConstraint: SCHEMA }
       );
       timing.prompt = Math.round(performance.now() - t2);
@@ -305,7 +348,7 @@ Rules:
     }
   }
 
-  async function downloadPromptModel(original, english, id) {
+  async function downloadPromptModel(original, english, lang, id) {
     ui?.root.querySelectorAll("button").forEach((b) => b.remove());
     setStatus("AIモデルをダウンロード中…(数GBあります)");
     try {
@@ -322,7 +365,7 @@ Rules:
       if (id !== runId) return;
       setStatus("");
       const timing = {};
-      const r = await generateAI(original, english, id, prepareAI(timing), timing);
+      const r = await generateAI(original, english, lang, id, prepareAI(timing), timing);
       setStatus(r.skipped || "");
     } catch (e) {
       console.warn("[nano-slug]", e);
@@ -347,15 +390,20 @@ Rules:
     const prep = prepareAI(timing); // 翻訳と並行してAIの準備を始める
 
     setStatus("翻訳中…");
+    const guess = R().guessLanguage(text, navigator.languages);
+    const lang = await detectLanguage(text, guess, id);
+    if (id !== runId) return;
+    if (!lang) { setStatus("題名の言語を判定できませんでした"); return; }
+
     let english;
     try {
-      english = await translate(text, id);
-      timing.translate = Math.round(performance.now() - t0);
+      english = await translate(text, lang, id);
+      timing.translate = Math.round(performance.now() - t0); // 言語判定の時間を含む
     } catch (e) {
       console.warn("[nano-slug]", e);
       const msg = {
         NO_TRANSLATOR: "このChromeでは翻訳APIが使えません(Chrome 138以降が必要)",
-        TRANSLATOR_UNAVAILABLE: "この環境では日本語→英語の翻訳が使えません"
+        TRANSLATOR_UNAVAILABLE: `この環境では${langName(lang)}→英語の翻訳が使えません`
       }[e.message] || "翻訳に失敗しました";
       setStatus(msg);
       return;
@@ -369,10 +417,10 @@ Rules:
 
     setStatus("");
     try {
-      const r = await generateAI(text, english, id, prep, timing);
+      const r = await generateAI(text, english, lang, id, prep, timing);
       if (id !== runId) return;
       if (r.needsDownload) {
-        addButton("AI候補を有効化(初回ダウンロード)", () => downloadPromptModel(text, english, id));
+        addButton("AI候補を有効化(初回ダウンロード)", () => downloadPromptModel(text, english, lang, id));
         return;
       }
       setStatus(r.skipped || "");

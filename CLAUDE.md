@@ -1,6 +1,6 @@
 # Nano Slug Generator — 開発メモ
 
-選択した日本語タイトルから、WordPress向けのslug候補を最大3つ出すChrome拡張（MV3）です。Chrome内蔵AIを使います。**配布前提**です。
+選択したタイトル（日本語に限らない。題名の言語を判定して英訳する）から、WordPress向けのslug候補を最大3つ出すChrome拡張（MV3）です。Chrome内蔵AIを使います。**配布前提**です。
 
 ## 構成
 
@@ -8,8 +8,8 @@
 |---|---|
 | `manifest.json` | 権限は `activeTab` / `scripting` / `contextMenus` / `clipboardWrite` のみ。`<all_urls>` は使わない |
 | `background.js` | 起動経路（`chrome.commands` の Alt+S と右クリックメニュー）。選択のあるフレームを探し、そこへ注入する |
-| `slug-rules.js` | 整形ルール（ブラウザ／Node共通）。`candidates(english, original)` → `{ light, strong }` |
-| `content.js` | 起動時だけ注入される。翻訳、AI生成、Shadow DOMのポップアップ、キー操作、コピー |
+| `slug-rules.js` | 整形ルールと言語判定（ブラウザ／Node共通）。`candidates(english, original)` → `{ light, strong }`、`guessLanguage(text, languages)` → `{ lang, candidates }`、`pickDetected(results, guess)` |
+| `content.js` | 起動時だけ注入される。言語判定（Language Detector）、翻訳、AI生成、Shadow DOMのポップアップ、キー操作、コピー |
 | `tests/` | Node + Playwright のテスト。AI APIは模擬（モック）で置き換えている |
 | `package.json` | テスト用のみ（devDependencies は playwright だけ）。拡張本体はビルド不要 |
 | `ai-flow/` | [issue-to-pr-flow](https://github.com/maepon/issue-to-pr-flow) を `git subtree` で取り込んだもの。**直接編集しない**（変更は上流へ） |
@@ -27,7 +27,7 @@
 
 | 番号 | タグ | 作り方 |
 |---|---|---|
-| 1 | 直訳 | Translator API（ja→en）＋軽め整形。上限8語・60文字 |
+| 1 | 直訳 | Translator API（判定した言語→en）＋軽め整形。上限8語・60文字 |
 | 2 | 短縮 | 同じ英訳＋強め整形。上限5語・45文字。**直訳より短くならなければ出さない**（無理に削ると内容語が消えるため） |
 | 3 | AI | Prompt API（`responseConstraint` でJSON固定）。2案を頼み、空いている番号を埋める |
 
@@ -42,7 +42,7 @@
   3. 保護されていない語（後ろから）
   4. 保護語（後ろから）
   - 先頭からの単純な切り捨てはしない。英語の題名は固有名詞が後ろに来やすいため。
-- **保護語:** 元の日本語にアルファベットで書かれていた語（macOS、Chromeなど）。ドット区切りの語は、`tokenize` の結果に加えて、ドットで分けた語も保護する（`Node.js` → `nodejs` / `node` / `js`）。分ける前に所有格を取り除く（`Next.js's` から `jss` を作らない）。
+- **保護語:** 元の題名にアルファベットで書かれていた語（macOS、Chromeなど）。ドット区切りの語は、`tokenize` の結果に加えて、ドットで分けた語も保護する（`Node.js` → `nodejs` / `node` / `js`）。分ける前に所有格を取り除く（`Next.js's` から `jss` を作らない）。
 - **重複語:** 語幹が同じ語（scope/scoped）は**後ろ側を残す**。後ろ側の方が "service workers" のような複合語であることが多いため。大文字の略語（HTTPS/HTTP）は語幹をまとめない。
 - **ドット区切り:** `tokenize` 内の `joinDotted` で、ドットが1つ・前が英字始まりで2文字以上・後ろが英字始まりなら1語にまとめる（`Next.js` → `nextjs`）。まとめないもの：前が1文字（`U.S.`）、数字が絡むバージョン番号、ドット2つ以上（`amazon.co.jp`）、後ろがドメインの語（`DOMAIN_SUFFIXES`: com/org/jp/dev。`note-com`、`zenn-dev`）、後ろが拡張子（`FILE_EXTS`: json/html/md/yml/yaml/txt/css。`package-json`、`style-css`）、前か後ろが `KEEP`（`vs.Vue` → `react-vs-vue`。`VS.Code` も `vs-code` になる）。2つの定数は別々で、後で足せる。`js` は `Node.js` などと区別できないので拡張子に入れない。
   - `web.dev` や `Normalize.css` のような製品名も分けて `web-dev` になる。誤判定した時の損失が左右で違い、`web-dev` は語が読めて情報も失わないが、`zenndev` は読みにくいため。`net` / `io` は `Socket.IO` などと区別できないので足さない。
@@ -58,7 +58,16 @@
   - 実機で、日本語IMEがONの時に数字キーが選択範囲を上書きする不具合があったため。
   - Escで閉じた時は元のフォーカスと選択範囲を戻す。コピーで閉じた時は戻さない。
 - **キー判定:** `e.code` を使う（IME ON時は `e.key` が当てにならないため）。テンキーも可。
-- **モデルのダウンロード:** Prompt APIのモデルは自動でダウンロードしない（数GBあるため）。ボタンを押した時だけダウンロードする。
+- **モデルのダウンロード:** Prompt APIのモデルは自動でダウンロードしない（数GBあるため）。ボタンを押した時だけダウンロードする。Language Detector と Translator のモデルも同じ（ボタンの後に `create()`）。
+
+## 言語判定（翻訳の前）
+
+- `run()` は `prepareAI` を先に始め、`guessLanguage(text, navigator.languages)` で判定する（`navigator.languages` は実行時に読む）。`candidates === null` なら確定で、Language Detector は呼ばない。
+- 判定の順: かな→`ja`、ハングル→`ko`、漢字→設定の最初の `ja` / `zh*`（無ければ `ja`、Detector の候補は `ja`/`zh`）、ラテン文字以外→設定のうち文字種が合う言語、ラテン文字だけ→設定に英語以外のラテン文字の言語があれば Detector、無ければ `en`、文字なし→`en`。
+- 決まらない時だけ Detector を使い、`pickDetected` で候補に絞って選ぶ。確度の閾値は設けない（候補を絞っており、短い題名では確度が低く出がちで、決める実測値も無いため）。
+- Detector が使えない・失敗した時は `guess.lang`（状況は表示しない）。`null` なら「題名の言語を判定できませんでした」。
+- 英語と判定したら翻訳しない。それ以外は `その言語→en` で翻訳する。`zh-TW` / `zh-HK` は `zh-Hant`。
+- **AIに原文を渡す条件:** `ja` / `en` のみ（`Title: 原文\nEnglish: 英訳`）。それ以外は `English: 英訳` だけ。`AI_OPTS` の `languages: ["en","ja"]` は言語決定前にセッションを準備して使い回すため変えず、宣言と実際の入力を一致させ、Prompt API の他言語対応に依存しないためである。
 
 ## 性能（実機計測、ページ内の初回）
 
@@ -93,6 +102,7 @@ node tests/ui.test.js      # ポップアップ（全API／DL必要／API非対�
 node tests/ime.test.js     # IME入力で選択範囲が書き換わらないか
 node tests/pending.test.js # AI枠の確保・番号固定・余り枠の削除
 node tests/perf.test.js    # 並行化とセッション使い回し
+node tests/lang.test.js    # 言語判定、Detector、翻訳の言語、AIへの入力
 ```
 
 `real.test.js` の英訳は、実機のスクリーンショットから推定したものです。
