@@ -12,6 +12,7 @@
 | `content.js` | 起動時だけ注入される。言語判定（Language Detector）、翻訳、AI生成、Shadow DOMのポップアップ、キー操作、コピー。文言は `t(key, ...subs)`（`chrome.i18n`）で取る |
 | `_locales/` | 表示用の文言（`en` / `ja`、`default_locale` は `en`）。`manifest.json` の `__MSG_…__` もここ。言語を足す時はフォルダを足すだけ |
 | `README.md` / `README.ja.md` | 利用者向けの説明（英語と日本語）。利用者に見える動きを変えたら両方を直す |
+| `PRIVACY_POLICY.md` | プライバシーポリシー（英語と日本語）。拡張が扱うデータや権限を変えたら直し、日付も改める |
 | `CONTRIBUTING.md` | 開発者向けの説明（英語）。テスト、整形ルール、言語判定の順、表示言語の足し方、計測ログ |
 | `tests/` | Node + Playwright のテスト。AI APIは模擬（モック）で置き換えている。`i18n-mock.js` は `chrome.i18n.getMessage` の模擬 |
 | `package.json` | テスト用のみ（devDependencies は playwright だけ）。拡張本体はビルド不要 |
@@ -98,7 +99,7 @@
 
 ## 未着手
 
-- アイコン、ストア掲載用の素材、プライバシーポリシー（データは端末外に出ない）
+- アイコン、ストア掲載用の素材
 - クラシックエディタや他のCMSでの動作確認
 - 汎用語リスト（GENERIC）の調整。実際のタイトルで様子を見ながら
 
