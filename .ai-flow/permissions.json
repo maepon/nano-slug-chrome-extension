@@ -9,6 +9,7 @@
     "Bash(npm run test:pending)",
     "Bash(npm run test:perf)",
     "Bash(npm run test:lang)",
+    "Bash(npm run test:i18n)",
     "Bash(node --test:*)",
     "Bash(node --version)",
     "Bash(npm --version)",
@@ -20,6 +21,7 @@
     "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm run test:pending)",
     "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm run test:perf)",
     "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm run test:lang)",
+    "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm run test:i18n)",
     "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/node --test:*)",
     "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/node --version)",
     "Bash(/Users/maepon/.nvm/versions/node/v24.14.0/bin/npm --version)"
