@@ -191,6 +191,9 @@
   }
 
   // ---------- 題名の言語判定(翻訳の前) ----------
+  // ラテン文字の判定へ進める、ラテン文字以外の文字(\p{L})の上限。実測値に基づかない
+  const MAX_NON_LATIN_LETTERS = 2;
+
   // 言語タグを正規化する: 主言語だけにする。zh は文字種が Hant なら zh-Hant。不正なタグは null
   function normLang(tag) {
     try {
@@ -220,6 +223,8 @@
 
   // 戻り値 { lang, candidates }。candidates が null なら lang で確定(Language Detector は呼ばない)。
   // 配列なら Detector で候補から選ぶ(使えない時の代わりの答えが lang。null は判定不能。[] は候補を絞らない)
+  // ラテン文字以外の文字が2文字以下で、ラテン文字もあれば、ラテン文字だけの題名と同じ判定に進む。
+  // 代わりの答えは、NFC 後に ASCII 以外のラテン文字(é など)があるかで決める
   function guessLanguage(text, languages) {
     const s = String(text || "");
     const langs = normLangs(languages);
@@ -237,14 +242,15 @@
       });
       if (hits.length === 1) return { lang: hits[0], candidates: null };
       if (hits.length > 1) return { lang: hits[0], candidates: hits };
-      return { lang: null, candidates: [] };
+      const nonLatinLetters = s.replace(/\p{Script=Latin}/gu, "").match(/\p{L}/gu).length;
+      if (!/\p{Script=Latin}/u.test(s) || nonLatinLetters > MAX_NON_LATIN_LETTERS) return { lang: null, candidates: [] };
     }
     if (!/\p{L}/u.test(s)) return { lang: "en", candidates: null };
     const latin = langs.filter((l) => scriptOf(l) === "Latn");
     const others = latin.filter((l) => l !== "en");
     if (!others.length) return { lang: "en", candidates: null };
     const candidates = latin.includes("en") ? latin : [...latin, "en"];
-    return { lang: /[^\x00-\x7f]/.test(s) ? others[0] : "en", candidates };
+    return { lang: /(?!\p{ASCII})\p{Script=Latin}/u.test(s.normalize("NFC")) ? others[0] : "en", candidates };
   }
 
   // Language Detector の結果(確度の高い順)から、候補に合う最初の言語を選ぶ。無ければ guess.lang

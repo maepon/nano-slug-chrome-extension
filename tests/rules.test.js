@@ -195,6 +195,35 @@ const guessCases = [
   ["Comment créer", ["en-US", "fr"], "fr", ["en", "fr"]],
   ["Comment créer", ["fr", "de", "en"], "fr", ["fr", "de", "en"]],
   ["2026 !!", ["fr"], "en", null],
+  // #12: ラテン文字以外が2文字以下ならラテン文字の判定に進む
+  ["How to use π in JavaScript", ["ja", "en"], "en", null],
+  ["λ calculus basics", ["ja", "en"], "en", null],
+  ["µs timing in Node.js", ["ja", "en"], "en", null],
+  ["Δx Δy", ["ja", "en"], "en", null],
+  ["Я и Chrome", ["ja", "en"], "en", null],
+  ["How to use π in JavaScript", ["fr", "en"], "en", ["fr", "en"]],
+  ["Créer π", ["fr", "en"], "fr", ["fr", "en"]],
+  // #12: 3文字以上は今のまま
+  ["α β γ in math", ["ja", "en"], null, []],
+  ["α β γ δ in math", ["ja", "en"], null, []],
+  ["Как установить Node.js", ["ja", "en"], null, []],
+  ["كيفية تثبيت Node.js", ["ja", "en"], null, []],
+  ["วิธีติดตั้ง Chrome", ["ja", "en"], null, []],
+  ["Установка Visual Studio Code", ["ja", "en"], null, []],
+  ["วิธีใช้ Visual Studio Code", ["ja", "en"], null, []],
+  ["Как установить Node.js", ["fr", "en"], null, []],
+  // #12: ラテン文字が無ければ文字数によらず今のまま
+  ["π", ["ja", "en"], null, []],
+  ["π 2026", ["ja", "en"], null, []],
+  // #12: 設定に文字種が合う言語があれば今のまま
+  ["How to use π in JavaScript", ["el", "en"], "el", null],
+  ["µs timing in Node.js", ["el", "en"], "en", null],
+  ["Как установить Node.js", ["ru", "en"], "ru", null],
+  // #12: 代わりの判定は NFC 後の ASCII 以外のラテン文字
+  ["What’s new in Chrome", ["fr", "en"], "en", ["fr", "en"]],
+  ["Chrome — release notes", ["fr", "en"], "en", ["fr", "en"]],
+  ["Créer une application web avec React", ["fr", "en"], "fr", ["fr", "en"]],
+  ["Comment créer".normalize("NFD"), ["fr", "en"], "fr", ["fr", "en"]],
 ];
 for (const [text, langs, lang, candidates] of guessCases) {
   eq(`guessLanguage: ${text} ${JSON.stringify(langs)}`, R.guessLanguage(text, langs), { lang, candidates });
