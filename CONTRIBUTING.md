@@ -75,3 +75,17 @@ Each run writes `[nano-slug] timing(ms)` to the DevTools console. In the WordPre
 | `waitSession` | Waiting for the session after translation finished |
 | `prompt` | AI generation |
 | `total` | The whole run |
+
+## Releases
+
+1. Update `version` in `manifest.json` through a pull request.
+2. After it's merged, tag `main` with the same version and push the tag:
+
+   ```bash
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+`.github/workflows/release.yml` then creates a GitHub release with a zip for the Chrome Web Store. It fails if the tag and the `manifest.json` version don't match.
+
+If the extension starts using a new file or folder, such as icons, add it to the zip in the workflow.
