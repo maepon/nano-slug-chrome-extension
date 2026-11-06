@@ -44,6 +44,7 @@ jobs:
           content.js \
           slug-rules.js \
           _locales/ \
+          images/icon/ \
           -x "*.DS_Store"
 
     - name: Verify package contents
