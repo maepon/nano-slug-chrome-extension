@@ -4,7 +4,7 @@
 
 Select a post title and get up to three English URL slug candidates for WordPress. Press a number key to copy one. Titles can be in Japanese, Korean, Chinese, and other languages. Everything runs on your device with Chrome's built-in AI.
 
-<!-- TODO: icon and screenshot -->
+![Slug candidates for titles in English, Spanish, Japanese, and Korean](images/nano-slug-ss.png)
 
 | Selected title | Candidate | Type |
 |---|---|---|
