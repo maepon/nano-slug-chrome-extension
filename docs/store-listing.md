@@ -46,11 +46,13 @@ PRIVATE BY DESIGN
 • It doesn't run on a page until you start it.
 
 REQUIREMENTS
-• Desktop Chrome 138 or later.
+• Desktop Google Chrome™ 138 or later.
 • The AI candidate also needs hardware that supports Gemini Nano. Without it, you still get the Literal and Short candidates.
 • Chrome may need to download models the first time. Downloads start only after you click the button in the popup. The AI model is several GB.
 
 Tested in the WordPress block editor. Source code and details: https://github.com/maepon/nano-slug-chrome-extension
+
+This extension is not made or endorsed by Google. Chrome and Gemini are trademarks of Google LLC.
 ```
 
 **ja**
@@ -79,11 +81,13 @@ Tested in the WordPress block editor. Source code and details: https://github.co
 • 起動するまで、ページでは何も動きません。
 
 動作環境
-• デスクトップ版 Chrome 138 以降
+• デスクトップ版 Google Chrome™ 138 以降
 • AI の候補には、Gemini Nano に対応するハードウェアも必要です。無い環境でも、直訳と短縮の候補は使えます。
 • 初回は Chrome がモデルをダウンロードすることがあります。ダウンロードは、ポップアップのボタンを押した時だけ始まります。AI のモデルは数GBあります。
 
 WordPress のブロックエディタで動作を確認しています。ソースコードと詳細：https://github.com/maepon/nano-slug-chrome-extension
+
+この拡張は Google が作成・推奨したものではありません。Chrome および Gemini は Google LLC の商標です。
 ```
 
 ### 画像
@@ -140,10 +144,12 @@ No, I am not using remote code.
 
 ### データの使用（Data usage）
 
-- 収集するデータの項目は、どれにもチェックを入れない。
+- **「Website content」にチェックを入れる**（選択したテキスト）。他の項目は入れない。
 - 3つの宣言（承認された用途以外で第三者に販売・移転しない／単一用途と関係ない目的に使わない／信用度の判定や貸付に使わない）には、すべてチェックを入れる。
 
-**未確認:** 選択したテキストは「Website content」に当たるが、端末の外へ送らず保存もしない。ストアのいう「収集（collect）」は開発者や外部へ送ることを指すと理解しているので、チェックしない想定。申請前にストアの User Data FAQ で確かめる。
+端末の中だけで処理し、送信も保存もしなくても申告が要る。[User Data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq) に "Extensions are required to disclose how they handle user data, even when data is processed or stored locally" とあり、「扱う（handle）」には using も含まれる。種類の例に "Website content and resources" がある。
+
+管理画面の申告・プライバシーポリシー・実際の動きが食い違うと削除の対象になる。PRIVACY_POLICY.md の「拡張が扱う情報」と合わせておく。
 
 ### プライバシーポリシーの URL
 
@@ -151,8 +157,18 @@ No, I am not using remote code.
 https://github.com/maepon/nano-slug-chrome-extension/blob/main/PRIVACY_POLICY.md
 ```
 
+## 名前の使い方（ブランド）
+
+- [ブランドガイドライン](https://developer.chrome.com/docs/webstore/branding)に従う。拡張の名前とロゴに Google の商標を使わない。互換性は `for Google Chrome™` のように ™ を付けて示し、説明文で使う商標には帰属表示を入れる。
+- [Google の商標一覧](https://about.google/brand-resource-center/trademark-list/)に「Chrome」「Google Chrome」「Gemini」がある（「Gemini Nano」は載っていない）。説明文の末尾に帰属表示を置いている。
+- [プログラムポリシー](https://developer.chrome.com/docs/webstore/program-policies/policies)により、Google に承認・推奨されているように書かない。
+
+## 拡張の画面での明示と同意（判断済み）
+
+[Disclosure Requirements](https://developer.chrome.com/docs/webstore/program-policies/disclosure-requirements) は、ユーザーデータを扱う拡張に、データの種類と使い道の明示と、利用者の同意を求めている（"prior to installation"。FAQ では "within the Product's user interface"）。機能に密接に関係するデータを除く、という例外の記述は無い。
+
+**同意の画面は作らずに申請する（2026-11-08 判断）。** 利用者が自分で選んで起動した時だけ、そのテキストを端末の中で処理し、送信も保存もしないため。申告とプライバシーポリシーで示す。審査で差し戻されたら、初回の起動時に短い説明と「OK」を出す形で対応する。
+
 ## 申請前に確かめること
 
-- 「Gemini Nano」「Chrome」の名前を説明文で使ってよいか（[ブランドガイドライン](https://developer.chrome.com/docs/webstore/branding)は未確認）
-- データの使用の欄の扱い（上記）
 - 実機での確認（#19）
