@@ -171,4 +171,4 @@ https://github.com/maepon/nano-slug-chrome-extension/blob/main/PRIVACY_POLICY.md
 
 ## 申請前に確かめること
 
-- 実機での確認（#19）
+- [x] 実機での確認（#19、2026-11-08 完了）
