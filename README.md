@@ -14,9 +14,9 @@ Select a post title and get up to three English URL slug candidates for WordPres
 
 ## Install
 
-<!-- TODO: add the Chrome Web Store link after publishing -->
+Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/nano-slug-generator/onclomkhflenccgdabmhmihjfiohigoe).
 
-The extension isn't on the Chrome Web Store yet. To try it now, load it from source:
+To run it from source instead (for development):
 
 1. Download or clone this repository.
 2. Open `chrome://extensions` and turn on **Developer mode**.

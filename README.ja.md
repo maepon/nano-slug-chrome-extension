@@ -14,9 +14,9 @@
 
 ## インストール
 
-<!-- TODO: 公開後に Chrome ウェブストアのリンクを足す -->
+[Chrome ウェブストア](https://chromewebstore.google.com/detail/nano-slug-generator/onclomkhflenccgdabmhmihjfiohigoe)からインストールしてください。
 
-Chrome ウェブストアにはまだ公開していません。今すぐ試す場合は、ソースから読み込んでください。
+ソースから読み込む場合（開発用）は、次の手順です。
 
 1. このリポジトリをダウンロードまたはクローンする。
 2. `chrome://extensions` を開き、**デベロッパーモード**をオンにする。
