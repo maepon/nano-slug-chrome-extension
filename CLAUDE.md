@@ -2,6 +2,8 @@
 
 選択したタイトル（日本語に限らない。題名の言語を判定して英訳する）から、WordPress向けのslug候補を最大3つ出すChrome拡張（MV3）です。Chrome内蔵AIを使います。**配布前提**です。
 
+Chrome ウェブストアで公開済み（v1.0.0、2026-11-09）：https://chromewebstore.google.com/detail/nano-slug-generator/onclomkhflenccgdabmhmihjfiohigoe
+
 ## 構成
 
 | ファイル | 役割 |
@@ -103,7 +105,6 @@
 
 ## 未着手
 
-- ストアへの申請（v1.0.0。素材・文言・実機確認は済み。公開後に README のインストール欄へストアのリンクを足す）
 - クラシックエディタや他のCMSでの動作確認
 - 汎用語リスト（GENERIC）の調整。実際のタイトルで様子を見ながら
 
